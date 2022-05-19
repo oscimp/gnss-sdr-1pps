@@ -1,0 +1,446 @@
+Index: gnss-sdr/src/algorithms/PVT/adapters/rtklib_pvt.cc
+===================================================================
+--- gnss-sdr.orig/src/algorithms/PVT/adapters/rtklib_pvt.cc
++++ gnss-sdr/src/algorithms/PVT/adapters/rtklib_pvt.cc
+@@ -53,6 +53,15 @@ Rtklib_Pvt::Rtklib_Pvt(const Configurati
+     const std::string default_nmea_dump_devname("/dev/tty1");
+     const std::string default_rtcm_dump_devname("/dev/pts/1");
+     DLOG(INFO) << "role " << role;
++    
++    PPS_Kp=configuration->property(role + ".PPS_Kp", 15000.);
++    PPS_Ki=configuration->property(role + ".PPS_Ki", 5000.);
++    SMA_internal_source_clock=configuration->property(role + ".SMA_internal_source_clock",true);
++    LO_external_frequ=configuration->property(role + ".LO_external_frequ",10000000);
++    PPS_correction=configuration->property(role + ".PPS_correction",false);
++    PPS_estimator_selected=configuration->property(role + ".PPS_estimator_selected",false);
++    SMA_IP_address=configuration->property(role + ".SMA_IP_address",std::string("192.168.1.69"));
++
+     pvt_output_parameters.dump = configuration->property(role + ".dump", false);
+     pvt_output_parameters.dump_filename = configuration->property(role + ".dump_filename", default_dump_filename);
+     pvt_output_parameters.dump_mat = configuration->property(role + ".dump_mat", true);
+@@ -768,7 +777,7 @@ Rtklib_Pvt::Rtklib_Pvt(const Configurati
+     pvt_output_parameters.max_obs_block_rx_clock_offset_ms = configuration->property(role + ".max_clock_offset_ms", pvt_output_parameters.max_obs_block_rx_clock_offset_ms);
+ 
+     // make PVT object
+-    pvt_ = rtklib_make_pvt_gs(in_streams_, pvt_output_parameters, rtk);
++    pvt_ = rtklib_make_pvt_gs(in_streams_, pvt_output_parameters, rtk, PPS_Kp, PPS_Ki,SMA_internal_source_clock,LO_external_frequ,PPS_correction,PPS_estimator_selected,SMA_IP_address);
+     DLOG(INFO) << "pvt(" << pvt_->unique_id() << ")";
+     if (out_streams_ > 0)
+         {
+Index: gnss-sdr/src/algorithms/PVT/gnuradio_blocks/CMakeLists.txt
+===================================================================
+--- gnss-sdr.orig/src/algorithms/PVT/gnuradio_blocks/CMakeLists.txt
++++ gnss-sdr/src/algorithms/PVT/gnuradio_blocks/CMakeLists.txt
+@@ -20,6 +20,11 @@ else()
+     add_library(pvt_gr_blocks rtklib_pvt_gs.cc rtklib_pvt_gs.h)
+ endif()
+ 
++# ADD VXI11 LIBRARY (JMF)
++find_library(VXI11 libvxi11.so.1 REQUIRED)
++    target_link_libraries( pvt_gr_blocks PRIVATE ${VXI11})
++# END ADD VXI11 LIBRARY (JMF)
++
+ if(${FILESYSTEM_FOUND})
+     target_compile_definitions(pvt_gr_blocks PRIVATE -DHAS_STD_FILESYSTEM=1)
+     if(${find_experimental})
+Index: gnss-sdr/src/algorithms/PVT/adapters/rtklib_pvt.h
+===================================================================
+--- gnss-sdr.orig/src/algorithms/PVT/adapters/rtklib_pvt.h
++++ gnss-sdr/src/algorithms/PVT/adapters/rtklib_pvt.h
+@@ -97,6 +97,13 @@ private:
+     std::string role_;
+     unsigned int in_streams_;
+     unsigned int out_streams_;
++    double PPS_Kp;
++    double PPS_Ki;
++    bool SMA_internal_source_clock;
++    double LO_external_frequ;
++    bool PPS_correction;
++    bool PPS_estimator_selected;
++    std::string SMA_IP_address;
+ };
+ 
+ #endif
+Index: gnss-sdr/src/algorithms/PVT/gnuradio_blocks/rtklib_pvt_gs.cc
+===================================================================
+--- gnss-sdr.orig/src/algorithms/PVT/gnuradio_blocks/rtklib_pvt_gs.cc
++++ gnss-sdr/src/algorithms/PVT/gnuradio_blocks/rtklib_pvt_gs.cc
+@@ -107,23 +107,148 @@ namespace bc = boost::math;
+ namespace bc = boost::integer;
+ #endif
+ 
++//------------ To access B210 
++
++#include "uhd/convert.hpp"
++#include "uhd/usrp/multi_usrp.hpp"
++#include "uhd/utils/safe_main.hpp"
++#include <stdint.h>
++#include <stdlib.h>
++#include <iostream>
++
++static const std::string GPIO_DEFAULT_GPIO       = "FP0";
++uhd::usrp::multi_usrp::sptr uhd_source_;
++
++//-------------R&S SMA 
++#include "vxi11_user.h"
++#pragma message "With VXI11"
++#define BUF_LEN 1000
++//        VXI11_CLINK *d_clink;
++//-------------R&S SMA end
++
++
+ 
+ rtklib_pvt_gs_sptr rtklib_make_pvt_gs(uint32_t nchannels,
+     const Pvt_Conf& conf_,
+-    const rtk_t& rtk)
++    const rtk_t& rtk, 
++    const double PPS_Kp,
++    const double PPS_Ki,
++    const bool SMA_internal_source_clock,
++    double LO_external_frequ,
++    const bool PPS_correction,
++    const bool PPS_estimator_selected,
++    const std::string SMA_IP_address)
+ {
+     return rtklib_pvt_gs_sptr(new rtklib_pvt_gs(nchannels,
+         conf_,
+-        rtk));
++        rtk,
++	PPS_Kp,
++	PPS_Ki,
++	SMA_internal_source_clock,
++	LO_external_frequ,
++	PPS_correction,
++	PPS_estimator_selected,
++	SMA_IP_address));
+ }
+ 
+ 
+ rtklib_pvt_gs::rtklib_pvt_gs(uint32_t nchannels,
+     const Pvt_Conf& conf_,
+-    const rtk_t& rtk) : gr::sync_block("rtklib_pvt_gs",
++    const rtk_t& rtk,
++    const double PPS_Kp,
++    const double PPS_Ki,
++    const bool SMA_internal_source_clock,
++    double LO_external_frequ,
++    const bool PPS_correction,
++    const bool PPS_estimator_selected,
++    const std::string SMA_IP_address) : gr::sync_block("rtklib_pvt_gs",
+                             gr::io_signature::make(nchannels, nchannels, sizeof(Gnss_Synchro)),
+                             gr::io_signature::make(0, 0, 0))
+ {
++    char* device_name = NULL;
++    char buf[BUF_LEN];
++    long bytes_returned;
++    char  cmd[256];
++    d_PPS_correction=PPS_correction;
++    if (d_PPS_correction)
++	{
++	    d_PPS_estimator_selected=PPS_estimator_selected;
++	    d_PPS_Kp=PPS_Kp;
++	    d_PPS_Ki=PPS_Ki;
++	    d_LO_external_frequ=LO_external_frequ;
++	    d_SMA_IP_address=SMA_IP_address;
++
++	    std::cout 
++		<< std::setprecision(9)
++		<< "Kp: " << d_PPS_Kp
++		<< " Ki: " << d_PPS_Ki
++		<< " LO: " << d_LO_external_frequ << "[Hz]" << '\n';
++
++	    LOG(INFO) << "vxi11 init\n";
++	    std::cout
++		<< "SMA IP address: " 
++		<<  d_SMA_IP_address << '\n';
++
++	    vxi11_open_device(&d_clink, d_SMA_IP_address.c_str(), device_name);
++	    sprintf (cmd, "*IDN?\n");
++	    vxi11_send (d_clink, cmd,strlen(cmd));
++	    bytes_returned=vxi11_receive (d_clink, buf, BUF_LEN);
++	    LOG(INFO) <<  buf ;
++	    if (SMA_internal_source_clock)
++		{
++		    sprintf (cmd, "ROSC:SOUR INT");
++		    vxi11_send (d_clink, cmd,strlen(cmd));
++		    std::cout << "SMA Internal source clock selected\n";
++		}
++	    else
++		{
++		    sprintf (cmd, "ROSC:SOUR EXT");
++		    vxi11_send (d_clink, cmd,strlen(cmd));
++		    sprintf (cmd, "ROSC:EXT:FREQ 10MHz");
++		    vxi11_send (d_clink, cmd,strlen(cmd));
++		    std::cout << "SMA External source clock selected\n";
++		}
++
++	    sprintf(cmd, "FREQ %0.3fHz",d_LO_external_frequ);
++	    vxi11_send (d_clink, cmd,strlen(cmd));
++
++
++
++//uhd not used yet
++
++
++    // variables to be set by po
++	    std::string args;
++	    uint32_t rb;
++	    std::string gpio=GPIO_DEFAULT_GPIO; // FP0
++	    uint32_t ddr;
++	    uint32_t ctrl;
++	    uint32_t mask;
++    // create a uhd_source_ device
++	    std::cout << std::endl;
++	    std::cout << boost::format("Creating the uhd_source_ device with: %s...") % args
++        	      << std::endl;
++	    uhd_source_ = uhd::usrp::multi_usrp::make(args);
++
++//uhd_source_
++	    std::cout << boost::format("Using Device: %s") % uhd_source_->get_pp_string() << std::endl;
++	    std::cout << "Using GPIO bank: " << gpio << std::endl;
++
++	    ddr=0x00;
++	    ctrl=0x00;
++	    mask=0xff;
++    // writing config
++	    uhd_source_->set_gpio_attr(gpio, "DDR", ddr, mask);   // set data direction register (DDR)
++	    uhd_source_->set_gpio_attr(gpio, "CTRL", ctrl, mask); // set control register
++	    uhd_source_->set_gpio_attr(gpio, "OUT", 0x00, mask);  // set control register
++	    uhd_source_->set_gpio_attr(gpio, "ATR_0X", 0x00, mask); // set ATR registers
++    // reading back
++	    rb= uhd_source_->get_gpio_attr(gpio, "DDR") & mask;
++	    std::cout << "DDR:" << rb << std::endl;
++	    rb= uhd_source_->get_gpio_attr(gpio, "CTRL") & mask;
++	    std::cout << "CTRL:" << rb << std::endl;
++	}
++
+     // Send feedback message to observables block with the receiver clock offset
+     this->message_port_register_out(pmt::mp("pvt_to_observables"));
+     // Send PVT status to gnss_flowgraph
+@@ -519,6 +644,10 @@ rtklib_pvt_gs::rtklib_pvt_gs(uint32_t nc
+ rtklib_pvt_gs::~rtklib_pvt_gs()
+ {
+     DLOG(INFO) << "PVT block destructor called.";
++    if (d_PPS_correction)
++        {
++            vxi11_close_device(d_clink, d_SMA_IP_address.c_str());
++        }
+     if (d_sysv_msqid != -1)
+         {
+             msgctl(d_sysv_msqid, IPC_RMID, nullptr);
+@@ -2115,8 +2244,6 @@ int rtklib_pvt_gs::work(int noutput_item
+                                             if (current_RX_time_ms % d_output_rate_ms == 0)
+                                                 {
+                                                     flag_compute_pvt_output = true;
+-                                                    // std::cout.precision(17);
+-                                                    // std::cout << "current_RX_time: " << current_RX_time << " map time: " << d_gnss_observables_map.begin()->second.RX_time << '\n';
+                                                 }
+                                             flag_pvt_valid = true;
+                                         }
+@@ -2215,11 +2342,28 @@ int rtklib_pvt_gs::work(int noutput_item
+                                         {
+                                             if (d_show_local_time_zone)
+                                                 {
++						    
+                                                     const boost::posix_time::ptime time_first_solution = d_user_pvt_solver->get_position_UTC_time() + d_utc_diff_time;
+                                                     std::cout << "First position fix at " << time_first_solution << d_local_time_str;
++						    if(d_PPS_correction)
++						    {
++						        d_pps_init_offset=d_user_pvt_solver->get_time_offset_s();
++						        d_pps_prev_error=0.;
++						        d_estimator=0.;
++						        LOG(INFO) << "init offset: " << d_pps_init_offset << "\n";
++						        d_LO_external_frequ_init=d_LO_external_frequ;
++						    }
+                                                 }
+                                             else
+                                                 {
++						    if(d_PPS_correction)
++						    {
++						        d_pps_init_offset=d_user_pvt_solver->get_time_offset_s();
++						        d_pps_prev_error=0.;
++						        d_estimator=0.;
++						        LOG(INFO) << "init offset: " << d_pps_init_offset << "\n";
++						        d_LO_external_frequ_init=d_LO_external_frequ;
++						    }
+                                                     std::cout << "First position fix at " << d_user_pvt_solver->get_position_UTC_time() << " UTC";
+                                                 }
+                                             std::cout << " is Lat = " << d_user_pvt_solver->get_latitude() << " [deg], Long = " << d_user_pvt_solver->get_longitude()
+@@ -4134,8 +4278,49 @@ int rtklib_pvt_gs::work(int noutput_item
+                                 << " [deg], Height = " << d_user_pvt_solver->get_height() << " [m]" << TEXT_RESET << '\n';
+ 
+                             std::cout << std::setprecision(ss);
+-                            DLOG(INFO) << "RX clock offset: " << d_user_pvt_solver->get_time_offset_s() << "[s]";
+-
++			    if (d_PPS_correction)
++			        {
++				    if (d_PPS_estimator_selected)
++				        {
++                            		    d_estimator_prev=d_estimator;
++			    		    d_pps_offset=d_internal_pvt_solver->get_time_offset_s();
++                            		    d_estimator=d_estimator*0.9+5.5e-8*(d_LO_external_frequ-d_LO_external_frequ_init)+0.1*(d_pps_offset-d_pps_init_offset);
++			    		    d_FREQU_correction=d_estimator*(d_PPS_Kp+d_PPS_Ki)-d_estimator_prev*d_PPS_Kp;
++					}
++				    else
++					{
++			    		    d_pps_prev_error=d_pps_offset-d_pps_init_offset;
++			    		    d_pps_offset=d_internal_pvt_solver->get_time_offset_s();
++			    		    d_FREQU_correction=(d_pps_offset-d_pps_init_offset)*(d_PPS_Kp+d_PPS_Ki)-d_pps_prev_error*d_PPS_Kp;
++					}
++				    if (d_FREQU_correction>0.074) //max 0.074 Hz
++					{
++					    d_FREQU_correction=0.074;
++					    std::cout << "sat\n";
++					}
++			    	    if (d_FREQU_correction<-0.074) //max 0.074 Hz
++					{
++					    d_FREQU_correction=-0.074;
++					    std::cout << "SAT\n";
++					}
++		    		    std::cout
++					<< "Estimator selected: " << std::boolalpha << d_PPS_estimator_selected  << " value: " <<  d_estimator << '\n';
++			    		    std::cout
++					<< std::fixed << std::setprecision(12)
++                               		<< "RX clock offset: " << d_pps_offset << " [s] " 
++					<< "diff offset: " << d_pps_offset-d_pps_init_offset << " [s] " 
++					<< "Frequ correction: " << d_FREQU_correction << " [Hz]" << '\n';
++
++                            	    char cmd[256];
++			    	    d_LO_external_frequ=d_LO_external_frequ-d_FREQU_correction; 
++
++				    std::cout
++					<< std::fixed << std::setprecision(3)
++					<< "LO Frequency: " << d_LO_external_frequ << " [Hz]" << '\n';
++
++    			    	    sprintf(cmd, "FREQ %0.3fHz",d_LO_external_frequ);
++			    	    vxi11_send (d_clink, cmd,strlen(cmd));
++			        }
+                             std::cout
+                                 << TEXT_BOLD_GREEN
+                                 << "Velocity: " << std::fixed << std::setprecision(3)
+Index: gnss-sdr/src/algorithms/PVT/gnuradio_blocks/rtklib_pvt_gs.h
+===================================================================
+--- gnss-sdr.orig/src/algorithms/PVT/gnuradio_blocks/rtklib_pvt_gs.h
++++ gnss-sdr/src/algorithms/PVT/gnuradio_blocks/rtklib_pvt_gs.h
+@@ -41,6 +41,8 @@
+ #include <boost/shared_ptr.hpp>
+ #endif
+ 
++#include "vxi11_user.h"
++
+ class Beidou_Dnav_Almanac;
+ class Beidou_Dnav_Ephemeris;
+ class Galileo_Almanac;
+@@ -66,7 +68,14 @@ using rtklib_pvt_gs_sptr = boost::shared
+ 
+ rtklib_pvt_gs_sptr rtklib_make_pvt_gs(uint32_t nchannels,
+     const Pvt_Conf& conf_,
+-    const rtk_t& rtk);
++    const rtk_t& rtk,
++    const double PPS_Kp,
++    const double PPS_Ki, 
++    const bool SMA_internal_source_clock, 
++    double LO_external_frequ,
++    const bool PPS_correction,
++    const bool PPS_estimator_selected,
++    const std::string SMA_IP_address);
+ 
+ /*!
+  * \brief This class implements a block that computes the PVT solution using the RTKLIB integrated library
+@@ -127,11 +136,26 @@ public:
+ private:
+     friend rtklib_pvt_gs_sptr rtklib_make_pvt_gs(uint32_t nchannels,
+         const Pvt_Conf& conf_,
+-        const rtk_t& rtk);
++        const rtk_t& rtk,
++	const double PPS_Kp,
++	const double PPS_Ki,
++	const bool SMA_internal_source_clock,
++	double LO_external_frequ,
++	const bool PPS_correction,
++	const bool PPS_estimator_selected,
++	const std::string SMA_IP_address);
+ 
+     rtklib_pvt_gs(uint32_t nchannels,
+         const Pvt_Conf& conf_,
+-        const rtk_t& rtk);
++        const rtk_t& rtk,
++	const double PPS_Kp,
++	const double PPS_Ki,
++	const bool SMA_internal_source_clock,
++	double LO_external_frequ,
++	const bool PPS_correction,
++	const bool PPS_estimator_selected,
++	const std::string SMA_IP_address);
++
+ 
+     void msg_handler_telemetry(const pmt::pmt_t& msg);
+ 
+@@ -267,6 +291,26 @@ private:
+     bool d_enable_rx_clock_correction;
+     bool d_rtcm_writing_started;
+     bool d_rtcm_enabled;
++  
++    bool d_PPS_correction; 
++    bool d_PPS_estimator_selected;
++    double d_PPS_Kp;
++    double d_PPS_Ki;
++    double d_LO_external_frequ;
++    double d_LO_external_frequ_init;
++
++    std::string d_SMA_IP_address;
++    VXI11_CLINK *d_clink;
++
++
++//-------------1PPS variables 
++
++    double d_FREQU_correction;
++    double d_pps_prev_error;
++    double d_estimator;
++    double d_estimator_prev;
++    double d_pps_init_offset;
++    double d_pps_offset;
+ };
+ 
+ #endif  // GNSS_SDR_RTKLIB_PVT_GS_H
+Index: gnss-sdr/src/algorithms/signal_source/adapters/uhd_signal_source.cc
+===================================================================
+--- gnss-sdr.orig/src/algorithms/signal_source/adapters/uhd_signal_source.cc
++++ gnss-sdr/src/algorithms/signal_source/adapters/uhd_signal_source.cc
+@@ -162,7 +162,8 @@ UhdSignalSource::UhdSignalSource(const C
+         }
+ 
+     // 1.2 Make the UHD source object
+-    uhd_source_ = gr::uhd::usrp_source::make(dev_addr, uhd_stream_args_);
++
++    uhd_source_ = gr::uhd::usrp_source::make(dev_addr, uhd_stream_args_, true); // jmfriedt 201026 true added to issue stream (now + 0.1 s)
+ 
+     // Set subdevice specification string for USRP family devices. It is composed of:
+     // <motherboard slot name>:<daughterboard frontend name>
+@@ -257,6 +258,11 @@ UhdSignalSource::UhdSignalSource(const C
+         {
+             LOG(ERROR) << "This implementation only supports one output stream";
+         }
++// ajout 201026 : delayed start
++uhd::time_spec_t curr_hw_time = uhd_source_->get_time_last_pps();
++uhd_source_->set_time_next_pps(uhd::time_spec_t(1.0) + curr_hw_time);
++// sleep(1.0)
++uhd_source_->set_start_time(uhd::time_spec_t(2.01) + curr_hw_time);
+ }
+ 
+ 
+Index: gnss-sdr/src/algorithms/signal_source/adapters/uhd_signal_source.h
+===================================================================
+--- gnss-sdr.orig/src/algorithms/signal_source/adapters/uhd_signal_source.h
++++ gnss-sdr/src/algorithms/signal_source/adapters/uhd_signal_source.h
+@@ -74,8 +74,9 @@ public:
+     gr::basic_block_sptr get_right_block() override;
+     gr::basic_block_sptr get_right_block(int RF_channel) override;
+ 
+-private:
+     gr::uhd::usrp_source::sptr uhd_source_;
++
++private:
+ #if GNURADIO_USES_STD_POINTERS
+     std::vector<std::shared_ptr<gr::block>> valve_;
+     std::shared_ptr<gr::block> spoofing_detect_;

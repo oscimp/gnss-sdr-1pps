@@ -1,0 +1,581 @@
+From f2cdf1d8803ae150c83532e253aa88d57a7d41ba Mon Sep 17 00:00:00 2001
+From: Gwenhael Goavec-Merou <gwenhael.goavec-merou@trabucayre.com>
+Date: Thu, 16 Sep 2021 16:19:04 +0200
+Subject: [PATCH] b200: add everything about PPS generation
+
+Signed-off-by: Gwenhael Goavec-Merou <gwenhael.goavec-merou@trabucayre.com>
+---
+ usrp3/lib/radio_200/radio_legacy.v     |  42 +++++++---
+ usrp3/top/b200/Makefile.b200.inc       |   3 +
+ usrp3/top/b200/b200.v                  |  22 +++--
+ usrp3/top/b200/b200_core.v             |  11 +++
+ usrp3/top/b200/coregen/coregen.cgp     |   2 +-
+ usrp3/top/b200/coregen_dsp/coregen.cgp |   2 +-
+ usrp3/top/b200/ggm_b210_hack.v         |  89 ++++++++++++++++++++
+ usrp3/top/b200/gpio.ucf                |   5 +-
+ usrp3/top/b200/my_pps_gen.v            | 112 +++++++++++++++++++++++++
+ usrp3/top/b200/pps_atr.v               |  95 +++++++++++++++++++++
+ 10 files changed, 363 insertions(+), 20 deletions(-)
+ create mode 100644 usrp3/top/b200/ggm_b210_hack.v
+ create mode 100644 usrp3/top/b200/my_pps_gen.v
+ create mode 100644 usrp3/top/b200/pps_atr.v
+
+diff --git a/usrp3/lib/radio_200/radio_legacy.v b/usrp3/lib/radio_200/radio_legacy.v
+index 06970f44..1da83974 100644
+--- a/usrp3/lib/radio_200/radio_legacy.v
++++ b/usrp3/lib/radio_200/radio_legacy.v
+@@ -33,6 +33,10 @@ module radio_legacy
+ 
+    output reg [63:0] vita_time_b,
+ 
++   input         clk_40m,
++   input         locked,
++   input         ggm_ext_pps,
++   output [ 6:0] fp_gpio,
+    output [63:0] debug
+    );
+ 
+@@ -274,16 +278,16 @@ endgenerate
+       .gpio_in(fe_gpio_in), .gpio_out(fe_gpio_out), .gpio_ddr(fe_gpio_ddr),
+       .gpio_out_fab(32'h00000000 /* no fabric control */), .gpio_sw_rb() );
+ 
+-   generate
+-      if (FP_GPIO != 0) begin: add_fp_gpio
+-         gpio_atr #(.BASE(SR_FP_GPIO), .WIDTH(10), .FAB_CTRL_EN(0)) fp_gpio_atr
+-            (.clk(radio_clk),.reset(radio_rst),
+-            .set_stb(set_stb),.set_addr(set_addr),.set_data(set_data),
+-            .rx(run_rx), .tx(run_tx),
+-            .gpio_in(fp_gpio_in), .gpio_out(fp_gpio_out), .gpio_ddr(fp_gpio_ddr), 
+-            .gpio_out_fab(10'h000 /* no fabric control */), .gpio_sw_rb(fp_gpio_readback));
+-      end
+-   endgenerate
++   //generate
++   //   if (FP_GPIO != 0) begin: add_fp_gpio
++   //      gpio_atr #(.BASE(SR_FP_GPIO), .WIDTH(10), .FAB_CTRL_EN(0)) fp_gpio_atr
++   //         (.clk(radio_clk),.reset(radio_rst),
++   //         .set_stb(set_stb),.set_addr(set_addr),.set_data(set_data),
++   //         .rx(run_rx), .tx(run_tx),
++   //         .gpio_in(fp_gpio_in), .gpio_out(fp_gpio_out), .gpio_ddr(fp_gpio_ddr), 
++   //         .gpio_out_fab(10'h000 /* no fabric control */), .gpio_sw_rb(fp_gpio_readback));
++   //   end
++   //endgenerate
+ 
+ 
+ 
+@@ -417,12 +421,28 @@ endgenerate
+    wire [11:0] 	  rx_seqnum;
+    wire [63:0] rx_tdata_i; wire rx_tlast_i, rx_tvalid_i, rx_tready_i;
+ 
++   wire [31:0] sample_rx_ggm;
++   generate
++      if (FP_GPIO != 0) begin: add_fp_gpio
++	     ggm_b210_hack #(.SR_FP_GPIO(SR_FP_GPIO)
++		 ) ggm_b210_hack_inst (
++			.radio_clk(radio_clk), .radio_rst(radio_rst), .clk_40m(clk_40m),
++			.locked(locked), .run_rx(run_rx), .run_tx(run_tx),
++			.set_stb(set_stb),.set_addr(set_addr),.set_data(set_data),
++			.strobe_rx(strobe_rx), .sample_rx_i(sample_rx), .sample_rx_o(sample_rx_ggm),
++			.ext_pps_i(ggm_ext_pps), .fp_gpio(fp_gpio)
++		 );
++      end else begin
++	  	assign sample_rx_ggm = sample_rx;
++	  end
++   endgenerate
++
+    wire [31:0] debug_rx_framer;
+    new_rx_framer #(.BASE(SR_RX_CTRL+4),.SAMPLE_FIFO_SIZE(SAMPLE_FIFO_SIZE)) new_rx_framer
+      (.clk(radio_clk), .reset(radio_rst), .clear(1'b0),
+       .set_stb(set_stb), .set_addr(set_addr), .set_data(set_data),
+       .vita_time(vita_time),
+-      .strobe(strobe_rx), .sample(sample_rx), .run(run_rx), .eob(eob_rx), .full(full),
++      .strobe(strobe_rx), .sample(sample_rx_ggm), .run(run_rx), .eob(eob_rx), .full(full),
+       .sid(rx_sid), .seqnum(rx_seqnum),
+       .o_tdata(rx_tdata_i), .o_tlast(rx_tlast_i), .o_tvalid(rx_tvalid_i), .o_tready(rx_tready_i),
+       .debug(debug_rx_framer));
+diff --git a/usrp3/top/b200/Makefile.b200.inc b/usrp3/top/b200/Makefile.b200.inc
+index 788280c6..6dfcc49c 100644
+--- a/usrp3/top/b200/Makefile.b200.inc
++++ b/usrp3/top/b200/Makefile.b200.inc
+@@ -69,6 +69,9 @@ b200.v \
+ b200_core.v \
+ b200_io.v \
+ b200.ucf \
++my_pps_gen.v \
++ggm_b210_hack.v \
++pps_atr.v \
+ timing.ucf \
+ S6CLK2PIN.v \
+ $(B200_COREGEN_SRCS)
+diff --git a/usrp3/top/b200/b200.v b/usrp3/top/b200/b200.v
+index 811842f3..2a290272 100644
+--- a/usrp3/top/b200/b200.v
++++ b/usrp3/top/b200/b200.v
+@@ -97,7 +97,8 @@ module b200 (
+    // NOTE: These pins are allocated from complimentry pairs and could potentially be used
+    // as differential style I/O.
+   `ifdef TARGET_B210
+-   inout [7:0] 	 fp_gpio,
++   inout [6:0] 	 fp_gpio,
++   input         fp_gpio7,
+   `endif
+    // Misc Hardware Control
+    output 	 ref_sel,
+@@ -134,10 +135,11 @@ module b200 (
+     ///////////////////////////////////////////////////////////////////////
+     wire bus_clk, gpif_clk, radio_clk;
+     wire locked;
++	wire clk_40m;
+     b200_clk_gen gen_clks
+     (
+         .CLK_IN1_40_P(codec_main_clk_p), .CLK_IN1_40_N(codec_main_clk_n),
+-        .CLK_OUT1_40_int(), .CLK_OUT2_100_gpif(gpif_clk), .CLK_OUT3_100_bus(),
++        .CLK_OUT1_40_int(clk_40m), .CLK_OUT2_100_gpif(gpif_clk), .CLK_OUT3_100_bus(),
+         .RESET(reset_global), .LOCKED(locked)
+     );
+ 
+@@ -182,7 +184,7 @@ module b200 (
+    wire [31:0] rx_data0, rx_data1;
+    wire [31:0] tx_data0, tx_data1;
+    wire mimo;
+-   
++
+    b200_io b200_io_i0
+      (
+       .reset(reset),
+@@ -212,7 +214,7 @@ module b200 (
+       );
+    
+    assign {rx_data0[19:16],rx_data0[3:0],rx_data1[19:16],rx_data1[3:0]} = 16'h0;
+-   
++
+    ///////////////////////////////////////////////////////////////////////
+    // SPI connections
+    ///////////////////////////////////////////////////////////////////////
+@@ -309,19 +311,27 @@ module b200 (
+ `endif
+ 
+       .lock_signals(codec_ctrl_out[7:6]),
++      .clk_40m(clk_40m), .locked(locked),
++      .ggm_ext_pps(fp_gpio7),
++	  .fp_gpio(fp_gpio),
+       .debug()
+    );
+ 
++/* ------------- */
++/* start modif GGM */
++/* ------------- */
++wire [7:0] fp_gpio_s;
++
+ `ifdef TARGET_B210
+    `ifdef DEBUG_UART
+       gpio_atr_io #(.WIDTH(8)) gpio_atr_io_inst (   // B210 with UART
+-         .clk(radio_clk), .gpio_pins(fp_gpio),
++         .clk(radio_clk), .gpio_pins(fp_gpio_s),
+          .gpio_ddr(fp_gpio_ddr[7:0]), .gpio_out(fp_gpio_out[7:0]), .gpio_in(fp_gpio_in[7:0])
+       );
+       assign fp_gpio_in[9:8] = 2'b00;
+    `else
+       gpio_atr_io #(.WIDTH(10)) gpio_atr_io_inst (  // B210 no UART
+-         .clk(radio_clk), .gpio_pins({FPGA_RXD0, FPGA_TXD0, fp_gpio}),
++         .clk(radio_clk), .gpio_pins({FPGA_RXD0, FPGA_TXD0, fp_gpio_s}),
+          .gpio_ddr(fp_gpio_ddr), .gpio_out(fp_gpio_out), .gpio_in(fp_gpio_in)
+       );
+    `endif
+diff --git a/usrp3/top/b200/b200_core.v b/usrp3/top/b200/b200_core.v
+index f03c5ea1..6007a785 100644
+--- a/usrp3/top/b200/b200_core.v
++++ b/usrp3/top/b200/b200_core.v
+@@ -70,6 +70,14 @@ module b200_core
+     ////////////////////////////////////////////////////////////////////
+     input [1:0] lock_signals,
+ 
++    ////////////////////////////////////////////////////////////////////
++    // GGM
++    ////////////////////////////////////////////////////////////////////
++    input clk_40m,
++    input locked,
++    input ggm_ext_pps,
++	output [6:0] fp_gpio,
++
+     ////////////////////////////////////////////////////////////////////
+     // debug signals
+     ////////////////////////////////////////////////////////////////////
+@@ -298,6 +306,7 @@ module b200_core
+    wire [63:0] radio0_debug;
+    wire [31:0] fe0_gpio_out32;
+    assign fe0_gpio_out = fe0_gpio_out32[7:0];
++   wire [7:0] ggm_tag_ctrl;
+ 
+    radio_legacy #(
+       .RADIO_FIFO_SIZE(RADIO_FIFO_SIZE),
+@@ -318,6 +327,7 @@ module b200_core
+       .rx_tdata(r0_rx_tdata), .rx_tlast(r0_rx_tlast),  .rx_tvalid(r0_rx_tvalid), .rx_tready(r0_rx_tready),
+       .ctrl_tdata(r0_ctrl_tdata), .ctrl_tlast(r0_ctrl_tlast),  .ctrl_tvalid(r0_ctrl_tvalid), .ctrl_tready(r0_ctrl_tready),
+       .resp_tdata(r0_resp_tdata), .resp_tlast(r0_resp_tlast),  .resp_tvalid(r0_resp_tvalid), .resp_tready(r0_resp_tready),
++      .clk_40m(clk_40m), .locked(locked), .ggm_ext_pps(ggm_ext_pps), .fp_gpio(fp_gpio),
+       .debug(radio0_debug)
+    );
+ 
+@@ -350,6 +360,7 @@ module b200_core
+       .rx_tdata(r1_rx_tdata), .rx_tlast(r1_rx_tlast),  .rx_tvalid(r1_rx_tvalid), .rx_tready(r1_rx_tready),
+       .ctrl_tdata(r1_ctrl_tdata), .ctrl_tlast(r1_ctrl_tlast),  .ctrl_tvalid(r1_ctrl_tvalid), .ctrl_tready(r1_ctrl_tready),
+       .resp_tdata(r1_resp_tdata), .resp_tlast(r1_resp_tlast),  .resp_tvalid(r1_resp_tvalid), .resp_tready(r1_resp_tready),
++      .clk_40m(clk_40m), .locked(locked), .ggm_ext_pps(ggm_ext_pps), .fp_gpio(),
+       .debug(radio1_debug)
+    );
+ `else
+diff --git a/usrp3/top/b200/coregen/coregen.cgp b/usrp3/top/b200/coregen/coregen.cgp
+index 24f6041a..fbcbca1f 100644
+--- a/usrp3/top/b200/coregen/coregen.cgp
++++ b/usrp3/top/b200/coregen/coregen.cgp
+@@ -1,6 +1,6 @@
+ SET busformat = BusFormatAngleBracketNotRipped
+ SET designentry = Verilog
+-SET device = xc6slx75
++SET device = xc6slx150
+ SET devicefamily = spartan6
+ SET flowvendor = Foundation_ISE
+ SET package = fgg484
+diff --git a/usrp3/top/b200/coregen_dsp/coregen.cgp b/usrp3/top/b200/coregen_dsp/coregen.cgp
+index 52a3a53e..7dbb4006 100644
+--- a/usrp3/top/b200/coregen_dsp/coregen.cgp
++++ b/usrp3/top/b200/coregen_dsp/coregen.cgp
+@@ -1,6 +1,6 @@
+ SET busformat = BusFormatAngleBracketNotRipped
+ SET designentry = Verilog
+-SET device = xc6slx75
++SET device = xc6slx150
+ SET devicefamily = spartan6
+ SET flowvendor = Other
+ SET package = fgg484
+diff --git a/usrp3/top/b200/ggm_b210_hack.v b/usrp3/top/b200/ggm_b210_hack.v
+new file mode 100644
+index 00000000..a3f05d6a
+--- /dev/null
++++ b/usrp3/top/b200/ggm_b210_hack.v
+@@ -0,0 +1,89 @@
++module ggm_b210_hack #( 
++	parameter SR_FP_GPIO = 8'd200
++) (
++	input         radio_clk,
++	input         radio_rst,
++	input         clk_40m,
++	input         locked,
++	input         run_rx,
++	input         run_tx,
++	/* comm */
++	input         set_stb,
++	input  [ 7:0] set_addr,
++	input  [31:0] set_data,
++	/* stream */
++	input             strobe_rx,
++	input  [31:0] sample_rx_i,
++	output reg [31:0] sample_rx_o,
++	/* pps */
++	input         ext_pps_i,
++	//input             pps_cnt_ctrl_en,
++	//input [15:0]      pps_cnt_ctrl,
++	output [6:0]  fp_gpio, // GPIO7 -> ext_pps
++	/* misc */
++	output [5:0]  settingsEn
++);
++	wire [7:0]  ggm_tag_ctrl;
++	wire pps_correct_en;
++	wire [15:0] pps_correct;
++
++	pps_atr #(.BASE(SR_FP_GPIO), .WIDTH(10), .FAB_CTRL_EN(0)
++	) fp_gpio_atr (
++		.clk(radio_clk),.reset(radio_rst),
++		.set_stb(set_stb),.set_addr(set_addr),.set_data(set_data),
++		.rx(run_rx), .tx(run_tx),
++		.settingsEn(settingsEn),
++		.ggm_tag_ctrl(ggm_tag_ctrl),
++		.pps_cnt_ctrl(pps_correct), .pps_cnt_ctrl_en(pps_correct_en)
++	);
++
++	wire my_pps, my_pps2;
++	my_pps_gen #(.MAX_CNT(40_000_000))
++	my_pps_inst (.clk_40m(clk_40m), .radio_clk(radio_clk), .locked(locked),
++		.time_sync_i(!run_rx),
++		.pps_cnt_ctrl_en(pps_correct_en), .pps_cnt_ctrl(pps_correct),
++		.pps(fp_gpio[0]), .pps2(fp_gpio[1])
++	);
++
++	reg int_pps_resync_d0_s, int_pps_resync_d1_s, int_pps_rise_d;
++	wire int_pps_rise_s = (int_pps_resync_d0_s ^ int_pps_resync_d1_s) & int_pps_resync_d0_s;
++	wire int_pps = ggm_tag_ctrl[0] && strobe_rx && (int_pps_rise_s || int_pps_rise_d);
++
++	reg ext_pps_resync_d0_s, ext_pps_resync_d1_s, ext_pps_rise_d;
++	wire ext_pps_rise_s = (ext_pps_resync_d0_s ^ ext_pps_resync_d1_s) & ext_pps_resync_d0_s;
++	wire ext_pps = ggm_tag_ctrl[1] && strobe_rx && (ext_pps_rise_s || ext_pps_rise_d);
++
++	/* 15:0 : Q
++	 * 31:16: I
++	*/
++	always @(*) begin
++		case ({int_pps, ext_pps})
++		2'b01:   sample_rx_o = 32'hAAAA5555;
++		2'b10:   sample_rx_o = 32'h5555AAAA;
++		2'b11:   sample_rx_o = 32'hCAFEBEBE;
++		default: sample_rx_o = sample_rx_i;
++		endcase
++	end
++
++	always @(posedge radio_clk) begin
++		int_pps_resync_d0_s <= fp_gpio[0];
++		int_pps_resync_d1_s <= int_pps_resync_d0_s;
++		ext_pps_resync_d0_s <= ext_pps_i;
++		ext_pps_resync_d1_s <= ext_pps_resync_d0_s;
++		
++		if (strobe_rx) begin
++			int_pps_rise_d <= 1'b0;
++		end else if (int_pps_rise_s) begin
++			int_pps_rise_d <= 1'b1;
++		end
++		if (strobe_rx) begin
++			ext_pps_rise_d <= 1'b0;
++		end else if (ext_pps_rise_s) begin
++			ext_pps_rise_d <= 1'b1;
++		end
++	end
++
++	assign fp_gpio[5:2] = {3'b0, run_rx};
++	assign fp_gpio[6]   = 1'b1;
++
++endmodule
+diff --git a/usrp3/top/b200/gpio.ucf b/usrp3/top/b200/gpio.ucf
+index 1bccafe0..4de0f5e8 100644
+--- a/usrp3/top/b200/gpio.ucf
++++ b/usrp3/top/b200/gpio.ucf
+@@ -8,5 +8,8 @@ NET "fp_gpio<3>" LOC = "G8" | IOSTANDARD = LVCMOS33 | PULLUP ;
+ NET "fp_gpio<4>" LOC = "H10" | IOSTANDARD = LVCMOS33 | PULLUP ;
+ NET "fp_gpio<5>" LOC = "G9" | IOSTANDARD = LVCMOS33 | PULLUP ;
+ NET "fp_gpio<6>" LOC = "F10" | IOSTANDARD = LVCMOS33 | PULLUP ;
+-NET "fp_gpio<7>" LOC = "E10" | IOSTANDARD = LVCMOS33 | PULLUP ;
++#NET "fp_gpio<7>" LOC = "E10" | IOSTANDARD = LVCMOS33 | PULLUP ;
++
++# J504.8 (aka gpio_L17p)
++NET "fp_gpio7" LOC = "E10" | IOSTANDARD = LVCMOS33;
+ 
+diff --git a/usrp3/top/b200/my_pps_gen.v b/usrp3/top/b200/my_pps_gen.v
+new file mode 100644
+index 00000000..1e05b6e3
+--- /dev/null
++++ b/usrp3/top/b200/my_pps_gen.v
+@@ -0,0 +1,112 @@
++`define USE_PPS 1
++`define RST_CNT_CTRL 1
++
++module my_pps_gen #(
++	parameter MAX_CNT = 40_000_000
++) (
++	input       clk_40m,         // <- used for everything
++	input       radio_clk,       // <- only used for sync
++	input       locked,          // PLL, used as reset
++	input       time_sync_i,     // force sync with timed cmd
++	input       pps_cnt_ctrl_en, // pps fix enable
++	input [15:0] pps_cnt_ctrl,    // pps fix
++	output      pps,             // official pps
++	output      pps2             // snd pps without correction
++);
++
++localparam WIDTH = 32;
++
++/* real and ref PPS */
++wire my_pps, my_pps2;
++
++/* detect rising and falling PPS edge */
++reg my_pps_d;
++wire my_pps_rise = (my_pps ^ my_pps_d) & my_pps;
++wire my_pps_fall = (my_pps ^ my_pps_d) & !my_pps;
++/* store previous PPS state */
++always @(posedge clk_40m) begin
++	my_pps_d <= my_pps;
++end
++
++/* pps fix machinery */
++/* radio clk is slower than 40m -> detect rising on enable */
++reg              cnt_ctrl_en_d; // delayed enable
++wire             cnt_ctrl_en;   // FIFO out enable
++wire             cnt_ctrl_en_strobe = (cnt_ctrl_en ^ cnt_ctrl_en_d) & cnt_ctrl_en;
++wire [15:0]      cnt_ctrl_sync; // pps fix after the FIFO
++reg  [WIDTH-1:0] cnt_ctrl_d;
++reg  [WIDTH-1:0] cnt_ctrl_d2;
++reg              cnt_ack_s, cnt_ctrl_rdy; // handshake
++wire             time_sync_s;
++
++always @(posedge clk_40m) begin
++	/* previous enable state */
++	cnt_ctrl_en_d <= cnt_ctrl_en;
++
++	/* store next pps fix at PPS falling edge */
++	if (!locked) begin
++		cnt_ctrl_d <= {WIDTH{1'b0}};
++	end else if (my_pps_fall) begin
++		cnt_ctrl_d <= cnt_ctrl_d2;
++	end
++
++	/* ack new pps fix */
++	cnt_ack_s <= (my_pps_fall) ? cnt_ctrl_rdy : 1'b0;
++
++	/* store user command
++	 * reset this register when content is take
++	 * by next
++	 */
++	if (!locked || cnt_ack_s) begin
++		cnt_ctrl_d2 <= {WIDTH{1'b0}};
++		cnt_ctrl_rdy <= 1'b0;
++	end else if (cnt_ctrl_en_strobe) begin
++		cnt_ctrl_d2 <= {{(32-16){cnt_ctrl_sync[15]}}, cnt_ctrl_sync};
++		cnt_ctrl_rdy <= 1'b1;
++	end
++end
++
++/* move pps fix from radio domain to 40MHz domain */
++`ifdef COCOTB_SIM
++	assign cnt_ctrl_en = pps_cnt_ctrl_en;
++	assign cnt_ctrl_sync = pps_cnt_ctrl;
++	assign time_sync_s = time_sync_i;
++`else
++	axi_fifo_2clk #(.WIDTH(64), .SIZE(0)) vita_time_fifo (
++		.reset(!locked),
++		.i_aclk(radio_clk), .i_tvalid(1'b1), .i_tready(),
++		.i_tdata({time_sync_i, pps_cnt_ctrl_en, pps_cnt_ctrl}),
++		.o_aclk(clk_40m), .o_tvalid(), .o_tready(1'b1),
++		.o_tdata({time_sync_s, cnt_ctrl_en, cnt_ctrl_sync})
++	);
++`endif
++
++/* ref PPS */
++reg [WIDTH:0] pps_cnt2;
++assign        my_pps2 = pps_cnt2 > MAX_CNT/2;
++wire          rst_cnt2 = pps_cnt2 == 0;
++always @(posedge clk_40m) begin
++	if (!locked | rst_cnt2 | time_sync_s) begin
++		pps_cnt2 <= {1'b0, MAX_CNT} - 1;
++	end else begin
++		pps_cnt2 <= pps_cnt2 - 1'b1;
++	end
++end
++/* end ref PPS */
++
++/* True PPS */
++reg [WIDTH:0] pps_cnt;
++assign        my_pps = pps_cnt > MAX_CNT/2;
++wire          rst_cnt = pps_cnt == 0;
++always @(posedge clk_40m) begin
++	if (!locked | rst_cnt | time_sync_s) begin
++		pps_cnt <= $signed({1'b0, MAX_CNT}) + $signed(cnt_ctrl_d) - 1;
++	end else begin
++		pps_cnt <= pps_cnt - 1'b1;
++	end
++end
++
++assign pps = my_pps;
++assign pps2 = my_pps2;
++
++endmodule
+diff --git a/usrp3/top/b200/pps_atr.v b/usrp3/top/b200/pps_atr.v
+new file mode 100644
+index 00000000..df78b824
+--- /dev/null
++++ b/usrp3/top/b200/pps_atr.v
+@@ -0,0 +1,95 @@
++
++//
++// Copyright 2011 Ettus Research LLC
++// Copyright 2018 Ettus Research, a National Instruments Company
++//
++// SPDX-License-Identifier: LGPL-3.0-or-later
++//
++
++module pps_atr #(
++  parameter BASE          = 0,
++  parameter WIDTH         = 32,
++  parameter FAB_CTRL_EN   = 0,
++  parameter DEFAULT_DDR   = 0,
++  parameter DEFAULT_IDLE  = 0
++) (
++  input clk, input reset,                                       //Clock and reset
++  input set_stb, input [7:0] set_addr, input [31:0] set_data,   //Settings control interface
++  input rx, input tx,                                           //Run signals that indicate tx and rx operation
++  output     [5:0]       settingsEn,
++  output reg [15:0]      pps_cnt_ctrl,
++  output     [7:0]       ggm_tag_ctrl,
++  output reg             pps_cnt_ctrl_en
++
++  //input      [WIDTH-1:0]  gpio_in,                              //GPIO input state
++  //output reg [WIDTH-1:0]  gpio_out,                             //GPIO output state
++  //output reg [WIDTH-1:0]  gpio_ddr,                             //GPIO direction (0=input, 1=output)
++  //input      [WIDTH-1:0]  gpio_out_fab,                         //GPIO driver bus from fabric
++  //output reg [WIDTH-1:0]  gpio_sw_rb                            //Readback value for software
++);
++  genvar i;
++
++  wire [WIDTH-1:0]   in_idle, in_tx, in_rx, in_fdx, ddr_reg, atr_disable, fabric_ctrl;
++  reg [WIDTH-1:0]    ogpio, igpio;
++
++  wire [WIDTH-1:0] pps_cnt_ctrl_d;
++  wire             pps_cnt_ctrl_chg;
++
++  wire [WIDTH-1:0] rx_data;
++  reg  [WIDTH-1:0] rx_data_d;
++  wire [WIDTH-1:0] tx_data;
++  reg  [WIDTH-1:0] tx_data_d;
++
++  setting_reg #(.my_addr(BASE+0), .width(WIDTH), .at_reset(DEFAULT_IDLE)) reg_idle (
++    .clk(clk),.rst(reset),.strobe(set_stb),.addr(set_addr), .in(set_data),
++    .out(in_idle),.changed(settingsEn[0]));
++
++  setting_reg #(.my_addr(BASE+1), .width(WIDTH), .at_reset(DEFAULT_DDR)) reg_rx (
++    .clk(clk),.rst(reset),.strobe(set_stb),.addr(set_addr), .in(set_data),
++    .out(rx_data),.changed(settingsEn[1]));
++
++  setting_reg #(.my_addr(BASE+2), .width(WIDTH), .at_reset(DEFAULT_DDR)) reg_tx (
++    .clk(clk),.rst(reset),.strobe(set_stb),.addr(set_addr), .in(set_data),
++    .out(tx_data),.changed(settingsEn[2]));
++
++  setting_reg #(.my_addr(BASE+3), .width(WIDTH)) reg_fdx (
++    .clk(clk),.rst(reset),.strobe(set_stb),.addr(set_addr), .in(set_data),
++    .out(/*in_fdx*/),.changed(settingsEn[3]));
++
++  setting_reg #(.my_addr(BASE+4), .width(WIDTH), .at_reset(DEFAULT_DDR)) reg_ddr (
++    .clk(clk),.rst(reset),.strobe(set_stb),.addr(set_addr), .in(set_data),
++    .out(/*ddr_reg*/pps_cnt_ctrl_d),.changed(pps_cnt_ctrl_chg));
++  assign settingsEn[4] = pps_cnt_ctrl_chg;
++
++  /* not use it !!! */
++  setting_reg #(.my_addr(BASE+5), .width(WIDTH)) reg_atr_disable (
++    .clk(clk),.rst(reset),.strobe(set_stb),.addr(set_addr), .in(set_data),
++    .out(/*pps_cnt_ctrl_d*/),.changed(settingsEn[5]));
++
++  //generate if (FAB_CTRL_EN == 1) begin
++  //  setting_reg #(.my_addr(BASE+6), .width(WIDTH)) reg_fabric_ctrl (
++  //    .clk(clk),.rst(reset),.strobe(set_stb),.addr(set_addr), .in(set_data),
++  //    .out(fabric_ctrl),.changed());
++  //end else begin
++  //  assign fabric_ctrl = {WIDTH{1'b0}};
++  //end endgenerate
++
++	assign ggm_tag_ctrl = rx_data_d[7:0];
++
++	always @(posedge clk) begin
++		pps_cnt_ctrl_en <= pps_cnt_ctrl_chg;
++
++		if (settingsEn[1])
++			rx_data_d <= rx_data;
++		if (settingsEn[2])
++			tx_data_d <= tx_data;
++
++  //	if (reset)
++  //   assign pps_cnt_ctrl = {WIDTH{1'b0}};
++  //  else if (pps_cnt_ctrl_chg)
++		//if (pps_cnt_ctrl_chg)
++		//pps_cnt_ctrl <= {rx_data_d[7:0], tx_data_d[7:0], pps_cnt_ctrl_d[7:0]};
++		pps_cnt_ctrl <= {tx_data_d[7:0], pps_cnt_ctrl_d[7:0]};
++  end
++
++endmodule // gpio_atr
+-- 
+2.32.0
+
