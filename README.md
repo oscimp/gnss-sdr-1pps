@@ -1,14 +1,16 @@
 This fork of [gnss-sdr](https://github.com/oscimp/gnss-sdr) aims at 
 providing spoofing detection capability by analyzing the direction of 
 arrival of the signals transmitted from each GPS satellite transmitting 
-in the L1 band and additionally 1-PPS output. It is assumed that two antennas 
-are connected to the two inputs of a dual channel coherent SDR receiver -- tests 
-were completed with the Ettus Research B210 -- separated by half a wavelength (10 cm at L1).
+in the L1 band and additionally 1-PPS output, as well as jamming detection
+and cancellation capability by detecting strongly correlated signals detected
+by multiple antennas. It is assumed that two antennas are connected to the 
+two inputs of a dual channel coherent SDR receiver -- tests were completed with 
+the Ettus Research B210 and Fairwaves XTRX -- separated by half a wavelength (10 cm at L1).
 
 The original gnss-sdr installation documentation is found in [README.original](README.original).
 
-This software was tested with an Ettus Research B210 dual-input SDR platform and
-with the File Source.
+This software was tested with an Ettus Research B210 dual-input SDR platform, with an
+XTRX Osmocom source and with the File Source.
 
 The Signal_Source philosophy is probably broken by including the spoofing detection
 processing in [spoofing_detection](src/algorithms/signal_source/libs/spoofing_detection.cc). 
@@ -16,13 +18,24 @@ This solves the issue of multiple antenna-inputs and single output.
 
 ## Compiling
 
+Rather than copying the whole gnss-sdr source tree and updating a few files, we have created
+patches (May 2022) and clone a given hash of the gnss-sdr source code to which patches are
+to be applied. After 
+```shell
+git clone --recursive https://github.com/oscimp/gnss-sdr-1pps
+```
+we apply the patches with
+```shell
+cd gnss-sdr
+for i in ../0*patch; do patch -p1 < $i;done
+```
 The authors of gnss-sdr have de-activated again logging in 0.13 (see https://gnss-sdr.org/gnss-sdr-v0013-released/) so
 compiling gnss-sdr with logging requires enabling the cmake flag ``-DENABLE_LOG=ON``. 
 
-Most basic compilation:
+Most basic compilation (activating logging and Osmosdr support for the XTRX embedded board):
 ```shell
 cd build
-cmake -DENABLE_LOG=ON ../
+cmake -DENABLE_LOG=ON -DENABLE_OSMOSDR=ON ../
 make -j4
 ```
 
@@ -38,7 +51,7 @@ or ``performance`` to switch the CPU to 1500 MHz speed using
 echo "performance" > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 ```
 Also, remember to run ``volk_profile`` on the target computer running gnss-sdr for best performance of VOLK (e.g. using the NEON
-SIMD instructions on ARM).
+SIMD instructions on ARM). In all cases it is assumed that the GNU Radio version linked against is at least 3.8.
 
 ## Synthesizing a new FPGA bitstream
 
