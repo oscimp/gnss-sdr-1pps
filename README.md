@@ -1,7 +1,7 @@
 This fork of [gnss-sdr](https://github.com/oscimp/gnss-sdr) aims at 
 providing spoofing detection capability by analyzing the direction of 
 arrival of the signals transmitted from each GPS satellite transmitting 
-in the L1 band and additionally 1-PPS output, as well as jamming detection
+in the L1 band and additionally 1-PPS output [0], as well as jamming detection
 and cancellation capability by detecting strongly correlated signals detected
 by multiple antennas. It is assumed that two antennas are connected to the 
 two inputs of a dual channel coherent SDR receiver -- tests were completed with 
@@ -243,11 +243,17 @@ following figure:
 
 <img src="with_sgd2.png">
 
+[0] D. Rabus, G. Goavec-Merou, G. Cabodevila, F. Meyer, J.-M Friedt, Generating A Timing Information (1-PPS) 
+From A Software Defined Radio Decoding of GPS Signals, Joint Conference of the European Frequency and Time 
+Forum and IEEE International Frequency Control Symposium (EFTF/IFCS), 2021 at 
+https://ieeexplore.ieee.org/document/9604249
+
 [1] J.-M. Friedt, W. Feng
 Anti-leurrage et anti-brouillage de GPS par réseau d'antennes, MISC 110 (2020) [in French]
 
 [2] J.-M. Friedt, W. Feng, G. Goavec-Merou, F. Meyer, GPS spoofing implementation by Software Defined 
-Radio and computationally efficient GPS spoofing detection and cancellation (submitted, 2020)
+Radio and computationally efficient GPS spoofing detection and cancellation, IEEE Aerospace and Electronic 
+Systems Magazine **36** (3), 36--52 (March 2021) at https://ieeexplore.ieee.org/document/9374670
 
 [3] J.-M Friedt, D. Rabus, G. Goavec-Merou, Software defined radio based Global Navigation Satellite 
 System real time spoofing detection and cancellation, GNU Radio Conference 2020 with the video of the
