@@ -57,7 +57,7 @@ SIMD instructions on ARM). In all cases it is assumed that the GNU Radio version
 
 Generating the 1-PPS output requires that the FPGA is configured with a custom bitstream. The patch
 ``b200-pps-uhd_67d783b.patch`` provided in the repository will implement such a functionality. In
-order to synthesize the new bitstream: using ISE 14.7 (for the Spartan 6 FPGA of the B210), run
+order to synthesize the new bitstream: using ISE 14.7 (for the Spartan 6 FPGA of the B210 -- make sure to install the System Edition and *not* the Webpack Edition which will be missing the LX150 files even with a full license), run
 
 ```
 # clone fpga repository
