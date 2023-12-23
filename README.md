@@ -62,7 +62,7 @@ order to synthesize the new bitstream: using ISE 14.7 (for the Spartan 6 FPGA of
 ```
 # clone fpga repository
 git clone https://github.com/EttusResearch/uhd
-cd fpga
+cd uhd/fpga/
 # move to required commit
 # git checkout 67d783b099826fb8a40deee0a7849b6d72bdcb2d
 # apply PPS support patch
