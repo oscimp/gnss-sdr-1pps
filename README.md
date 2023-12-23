@@ -72,7 +72,7 @@ cd usrp3/top/b200/
 make B210
 ```
 with the output of the synthesis found in ``build/usrp_b210_fpga.bin`` to be copied in the ``UHD_IMAGES`` directory,
-most probably ``/usr/share/uhd/images``. Possibly use ``uhd_image_loader`` to force loading the bitstream (which will be
+most probably ``/usr/share/uhd/images``. Possibly use ``uhd_image_loader --args="type=b200"`` to force loading the bitstream (which will be
 updated anyway since libuhd will detect the inconsistency between the stored bitstream and the available bitstream).
 
 Following this update, the 1-PPS output is generated on the following GPIO:
