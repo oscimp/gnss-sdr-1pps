@@ -102,6 +102,11 @@ PVT.SMA_internal_source_clock=true; default:true: Internal 10 MHz , false: Exter
 ```
 with ``PPS_correction`` activating the output control (otherwise the 1-PPS is free running in the FPGA), ``PPS_estimator`` the use of an estimator prior to the PI control loop, ``PPS_Kp`` and ``PPS_Ki`` respectively the proportional and integral coefficient of the PI loop. Additionnally, ``LO_external_freq`` is the initial frequency setting of the Rohde & Schwarz SMA100A whose IP address is defined with ``IP_SMA_address``. Finally, the clock source of the SMA100A is defined with ``SMA_internal_source_clock`` with false being the external source, in our case a hydrogen maser output used as reference signal.
 
+At a low level, the communication between the UHD library on the CPU and the FPGA registers is as follows, diverting these registers from their original GPIO control functions:
+* RX for controlling the tag introduced on the IQ stream when the internal FPGA 1-PPS is triggered
+* TX and DDR (both 16 bits to create a 32-bit value -- TX MSB and DDR LSB) are set sequentially in this order to define
+the top value of the counter and hence shift the 1-PPS position. The top value is only set for 1 period before returning to the clock rate of 40E6.
+
 ## Spoofing detection and cancellation
 
 The two sources for which configuration options have been added are File Source and UHD Source
