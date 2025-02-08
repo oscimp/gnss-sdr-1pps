@@ -39,11 +39,15 @@ cmake -DENABLE_LOG=ON -DENABLE_OSMOSDR=ON ../
 make -j4
 ```
 
-For compiling gnss-sdr for 
-Raspberry Pi 4 out of a Buildroot environment, use
+For compiling ``gnss-sdr`` for Raspberry Pi 4 out of a Buildroot environment, use
 ```
 cmake -DCMAKE_TOOLCHAIN_FILE=/directory/to/buildroot_RaspberryPi4/output/host/usr/share/buildroot/toolchainfile.cmake -DENABLE_LOG=ON ../
 ```
+Since gnss-sdr requires many dependencies, a Buildroot ``defconfig`` configuration file for the Compute Module 4 (CM4) ie
+provided as ``buildroot2024.11.1_defconfig`` (tested in Feb. 2025 with Buildroot 2024.11.1): run ``make buildroot2024.11.1_defconfig`` from
+the Buildroot directory to apply these settings, and ``make`` to build the cross-compilation environment. For running only the spoofing
+and jamming detection features, apply patches 1 to 3 but avoid path 4 which requires a VXI11 communication library. The FFT API was updated
+to match GNU Radio 3.10 (Feb. 2025).
 
 The default CPU policy for Buildroot is powersaving where the Raspberry Pi 4 CPUs run at 600 MHz. Please switch to ``ondemand``
 or ``performance`` to switch the CPU to 1500 MHz speed using
