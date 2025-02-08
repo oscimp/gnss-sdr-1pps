@@ -105,7 +105,7 @@ index 57b094456..b19c63ba8 100644
      rtl_tcp_dongle_info.cc
      gnss_sdr_valve.cc
      sgd_impl.cc
-+	jamming_detection.cc
++    jamming_detection.cc
      gnss_sdr_timestamp.cc
      ${OPT_SIGNAL_SOURCE_LIB_SOURCES}
  )
@@ -113,7 +113,7 @@ index 57b094456..b19c63ba8 100644
      rtl_tcp_commands.h
      rtl_tcp_dongle_info.h
      gnss_sdr_valve.h
-+    jamming_detection
++    jamming_detection.h
      sgd.h
      ${OPT_SIGNAL_SOURCE_LIB_HEADERS}
  )
