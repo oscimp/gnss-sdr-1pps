@@ -53,6 +53,9 @@ echo "performance" > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 Also, remember to run ``volk_profile`` on the target computer running gnss-sdr for best performance of VOLK (e.g. using the NEON
 SIMD instructions on ARM). In all cases it is assumed that the GNU Radio version linked against is at least 3.8.
 
+Support for VXI11 communication (used for communicating with a R&S SMA100A synthesizer for controlling
+the B210 reference clock) can be disabled using ``cmake -DVXI11=FALSE ../``
+
 ## Synthesizing a new FPGA bitstream
 
 Generating the 1-PPS output requires that the FPGA is configured with a custom bitstream. The patch
