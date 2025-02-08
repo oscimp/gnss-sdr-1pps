@@ -238,7 +238,7 @@ index 000000000..d3bc50e2d
 +    const gr_complex* in;
 +    gr_complex* carre=(gr_complex*)volk_malloc(sizeof(gr_complex)*CHUNK_SIZE, alignment);
 +// see https://github.com/gnss-sdr/gnss-sdr/blob/master/src/algorithms/acquisition/gnuradio_blocks/pcps_acquisition_fine_doppler_cc.h for declaration of gr::fft
-+//    gr::fft::fft_complex* plan = new gr::fft::fft_complex(CHUNK_SIZE, true);
++//    gr::fft::fft_complex_fwd* plan = new gr::fft::fft_complex_fwd(CHUNK_SIZE); // , true);
 +    bufin=plan->get_inbuf();
 +//    printf("Spoofing block: %d items, %ld out, %ld in\n",noutput_items,output_items.size(),input_items.size());
 +//            Spoofing block: 32768 items, 1 out, 2 in

@@ -329,8 +329,8 @@ index 000000000..28d488a77
 +#endif
 +
 +    Gnss_Jamming_Protect(float threshold, int averages);
-+    gr::fft::fft_complex* plan = new gr::fft::fft_complex(CHUNK_SIZE, true);
-+    gr::fft::fft_complex* iplan= new gr::fft::fft_complex(CHUNK_SIZE, false); // forward = false
++    gr::fft::fft_complex_fwd* plan = new gr::fft::fft_complex_fwd(CHUNK_SIZE); //, true);
++    gr::fft::fft_complex_rev* iplan= new gr::fft::fft_complex_rev(CHUNK_SIZE); //, false); // forward = false
 +    gr_complex bufout0[CHUNK_SIZE];
 +    gr_complex bufout[CHUNK_SIZE];
 +    gr_complex processed_output[CHUNK_SIZE];
