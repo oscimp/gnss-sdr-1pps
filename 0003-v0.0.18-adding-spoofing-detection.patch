@@ -534,7 +534,7 @@ index 000000000..6232fbf5d
 +
 +    Gnss_Spoofing_Protect(float threshold, int averages);
 +
-+    gr::fft::fft_complex* plan = new gr::fft::fft_complex(CHUNK_SIZE, true);
++    gr::fft::fft_complex_fwd* plan = new gr::fft::fft_complex(CHUNK_SIZE); // , true);
 +    gr_complex spoofing_average_mul[KEEP_SIZE*2]; // 2* since sta followed by sto -> must fftshift to put 0 at center
 +    gr_complex spoofing_average_div[KEEP_SIZE*2]; // 2* since sta followed by sto -> must fftshift to put 0 at center
 +    gr_complex bufout0_sta[KEEP_SIZE];
