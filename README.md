@@ -27,10 +27,12 @@ git clone --recursive https://github.com/oscimp/gnss-sdr-1pps
 we apply the patches with
 ```shell
 cd gnss-sdr
-for i in ../0*patch; do patch -p1 < $i;done
+for i in ../0*v0.0.18*patch; do patch -p1 < $i;done
 ```
 The authors of gnss-sdr have de-activated again logging in 0.13 (see https://gnss-sdr.org/gnss-sdr-v0013-released/) so
-compiling gnss-sdr with logging requires enabling the cmake flag ``-DENABLE_LOG=ON``. 
+compiling gnss-sdr with logging requires enabling the cmake flag ``-DENABLE_LOG=ON``. This command is applicable to
+post-v0.0.18 gnss-sdr while the non-v0.0.18 patches were generated against pre-0.0.18 versions of gnss-sdr and are provided
+for reference.
 
 Most basic compilation (activating logging and Osmosdr support for the XTRX embedded board):
 ```shell
