@@ -286,58 +286,63 @@ index 8f6f1648a..a9407d3a2 100644
                                                      std::cout << "First position fix at " << d_user_pvt_solver->get_position_UTC_time() << " UTC";
                                                  }
                                              std::cout << " is Lat = " << d_user_pvt_solver->get_latitude() << " [deg], Long = " << d_user_pvt_solver->get_longitude()
-@@ -2414,8 +2557,49 @@ int rtklib_pvt_gs::work(int noutput_items, gr_vector_const_void_star& input_item
-                                 << " [deg], Height = " << d_user_pvt_solver->get_height() << " [m]" << TEXT_RESET << '\n';
- 
-                             std::cout << std::setprecision(ss);
+@@ -2407,11 +2550,53 @@ int rtklib_pvt_gs::work(int noutput_items, gr_vector_const_void_star& input_item
+                                 << std::fixed << std::setprecision(6) << d_user_pvt_solver->get_latitude()
+                                 << " [deg], Long = " << d_user_pvt_solver->get_longitude() << " [deg], Height = "
+                                 << std::fixed << std::setprecision(2) << d_user_pvt_solver->get_height() << std::setprecision(ss) << " [m]" << TEXT_RESET << std::endl;
 -                            DLOG(INFO) << "RX clock offset: " << d_user_pvt_solver->get_time_offset_s() << "[s]";
--
-+			    if (d_PPS_correction)
-+			        {
-+				    if (d_PPS_estimator_selected)
-+				        {
-+                            		    d_estimator_prev=d_estimator;
-+			    		    d_pps_offset=d_internal_pvt_solver->get_time_offset_s();
-+                            		    d_estimator=d_estimator*0.9+5.5e-8*(d_LO_external_frequ-d_LO_external_frequ_init)+0.1*(d_pps_offset-d_pps_init_offset);
-+			    		    d_FREQU_correction=d_estimator*(d_PPS_Kp+d_PPS_Ki)-d_estimator_prev*d_PPS_Kp;
-+					}
-+				    else
-+					{
-+			    		    d_pps_prev_error=d_pps_offset-d_pps_init_offset;
-+			    		    d_pps_offset=d_internal_pvt_solver->get_time_offset_s();
-+			    		    d_FREQU_correction=(d_pps_offset-d_pps_init_offset)*(d_PPS_Kp+d_PPS_Ki)-d_pps_prev_error*d_PPS_Kp;
-+					}
-+				    if (d_FREQU_correction>0.074) //max 0.074 Hz
-+					{
-+					    d_FREQU_correction=0.074;
-+					    std::cout << "sat\n";
-+					}
-+			    	    if (d_FREQU_correction<-0.074) //max 0.074 Hz
-+					{
-+					    d_FREQU_correction=-0.074;
-+					    std::cout << "SAT\n";
-+					}
-+		    		    std::cout
-+					<< "Estimator selected: " << std::boolalpha << d_PPS_estimator_selected  << " value: " <<  d_estimator << '\n';
-+			    		    std::cout
-+					<< std::fixed << std::setprecision(12)
-+                               		<< "RX clock offset: " << d_pps_offset << " [s] " 
-+					<< "diff offset: " << d_pps_offset-d_pps_init_offset << " [s] " 
-+					<< "Frequ correction: " << d_FREQU_correction << " [Hz]" << '\n';
-+
-+                            	    char cmd[256];
-+			    	    d_LO_external_frequ=d_LO_external_frequ-d_FREQU_correction; 
-+
-+				    std::cout
-+					<< std::fixed << std::setprecision(3)
-+					<< "LO Frequency: " << d_LO_external_frequ << " [Hz]" << '\n';
-+
-+    			    	    sprintf(cmd, "FREQ %0.3fHz",d_LO_external_frequ);
-+			    	    vxi11_send (d_clink, cmd,strlen(cmd));
-+			        }
-                             std::cout
+ 
+-                            std::cout
++                            if (d_PPS_correction)
++                                {
++                                    if (d_PPS_estimator_selected)
++                                        {
++                                            d_estimator_prev=d_estimator;
++                                            d_pps_offset=d_internal_pvt_solver->get_time_offset_s();
++                                            d_estimator=d_estimator*0.9+5.5e-8*(d_LO_external_frequ-d_LO_external_frequ_init)+0.1*(d_pps_offset-d_pps_init_offset);
++                                            d_FREQU_correction=d_estimator*(d_PPS_Kp+d_PPS_Ki)-d_estimator_prev*d_PPS_Kp;
++                                        }
++                                    else
++                                        {
++                                            d_pps_prev_error=d_pps_offset-d_pps_init_offset;
++                                            d_pps_offset=d_internal_pvt_solver->get_time_offset_s();
++                                            d_FREQU_correction=(d_pps_offset-d_pps_init_offset)*(d_PPS_Kp+d_PPS_Ki)-d_pps_prev_error*d_PPS_Kp;
++                                        }
++                                    if (d_FREQU_correction>0.074) //max 0.074 Hz
++                                        {
++                                            d_FREQU_correction=0.074;
++                                            std::cout << "sat\n";
++                                        }
++                                    if (d_FREQU_correction<-0.074) //max 0.074 Hz
++                                        {
++                                            d_FREQU_correction=-0.074;
++                                            std::cout << "SAT\n";
++                                        }
++                                    std::cout
++                                        << "Estimator selected: " << std::boolalpha << d_PPS_estimator_selected  << " value: " <<  d_estimator << '\n';
++                                            std::cout
++                                        << std::fixed << std::setprecision(12)
++                                                << "RX clock offset: " << d_pps_offset << " [s] " 
++                                        << "diff offset: " << d_pps_offset-d_pps_init_offset << " [s] " 
++                                        << "Frequ correction: " << d_FREQU_correction << " [Hz]" << '\n';
++ 
++                                    char cmd[256];
++                                    d_LO_external_frequ=d_LO_external_frequ-d_FREQU_correction; 
++ 
++                                    std::cout
++                                        << std::fixed << std::setprecision(3)
++                                        << "LO Frequency: " << d_LO_external_frequ << " [Hz]" << '\n';
++ 
++                                    sprintf(cmd, "FREQ %0.3fHz",d_LO_external_frequ);
++                                    vxi11_send (d_clink, cmd,strlen(cmd));
++                                }
++                             std::cout
                                  << TEXT_BOLD_GREEN
-                                 << "Velocity: " << std::fixed << std::setprecision(3)
+-                                << "Velocity: " << std::fixed << std::setprecision(2)
++                                << "Velocity: " << std::fixed << std::setprecision(3)
+                                 << "East: " << d_user_pvt_solver->get_rx_vel()[0] << " [m/s], North: " << d_user_pvt_solver->get_rx_vel()[1]
+                                 << " [m/s], Up = " << d_user_pvt_solver->get_rx_vel()[2] << std::setprecision(ss) << " [m/s]" << TEXT_RESET << std::endl;
+                             DLOG(INFO) << "RX clock drift: " << d_user_pvt_solver->get_clock_drift_ppm() << " [ppm]";
 diff --git a/src/algorithms/PVT/gnuradio_blocks/rtklib_pvt_gs.h b/src/algorithms/PVT/gnuradio_blocks/rtklib_pvt_gs.h
 index 747c31c65..f58bf2bc6 100644
 --- a/src/algorithms/PVT/gnuradio_blocks/rtklib_pvt_gs.h
