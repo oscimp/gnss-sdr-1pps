@@ -107,20 +107,20 @@ diff --git a/src/algorithms/signal_source/libs/CMakeLists.txt b/src/algorithms/s
 index b19c63ba8..681f827eb 100644
 --- a/src/algorithms/signal_source/libs/CMakeLists.txt
 +++ b/src/algorithms/signal_source/libs/CMakeLists.txt
-@@ -33,6 +33,7 @@ set(SIGNAL_SOURCE_LIB_SOURCES
+@@ -42,6 +42,7 @@ set(SIGNAL_SOURCE_LIB_SOURCES
      rtl_tcp_dongle_info.cc
      gnss_sdr_valve.cc
      sgd_impl.cc
 +    spoofing_detection.cc
- 	jamming_detection.cc
+     jamming_detection.cc
      gnss_sdr_timestamp.cc
      ${OPT_SIGNAL_SOURCE_LIB_SOURCES}
-@@ -42,6 +43,7 @@ set(SIGNAL_SOURCE_LIB_HEADERS
+@@ -51,6 +52,7 @@ set(SIGNAL_SOURCE_LIB_HEADERS
      rtl_tcp_commands.h
      rtl_tcp_dongle_info.h
      gnss_sdr_valve.h
 +    spoofing_detection.h
-     jamming_detection
+     jamming_detection.h
      sgd.h
      ${OPT_SIGNAL_SOURCE_LIB_HEADERS}
 diff --git a/src/algorithms/signal_source/libs/spoofing_detection.cc b/src/algorithms/signal_source/libs/spoofing_detection.cc
