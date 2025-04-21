@@ -1,0 +1,350 @@
+From b124de5f1d9a6b0e7c020990e59076f78c2a2328 Mon Sep 17 00:00:00 2001
+From: Gwenhael Goavec-Merou <gwenhael.goavec-merou@trabucayre.com>
+Date: Fri, 28 Jul 2023 15:57:37 +0200
+Subject: [PATCH 2/2] adding jamming_xcorr algo
+
+Signed-off-by: Gwenhael Goavec-Merou <gwenhael.goavec-merou@trabucayre.com>
+---
+ .../adapters/uhd_signal_source.cc             |  23 +++-
+ .../adapters/uhd_signal_source.h              |   4 +
+ .../signal_source/libs/CMakeLists.txt         |   2 +
+ .../signal_source/libs/jamming_detection.cc   | 125 ++++++++++++++++++
+ .../signal_source/libs/jamming_detection.h    |  91 +++++++++++++
+ 5 files changed, 243 insertions(+), 2 deletions(-)
+ create mode 100644 src/algorithms/signal_source/libs/jamming_detection.cc
+ create mode 100644 src/algorithms/signal_source/libs/jamming_detection.h
+
+diff --git a/src/algorithms/signal_source/adapters/uhd_signal_source.cc b/src/algorithms/signal_source/adapters/uhd_signal_source.cc
+index 2a738abb9..8deea3a47 100644
+--- a/src/algorithms/signal_source/adapters/uhd_signal_source.cc
++++ b/src/algorithms/signal_source/adapters/uhd_signal_source.cc
+@@ -21,6 +21,7 @@
+ #include "gnss_sdr_filesystem.h"
+ #include "gnss_sdr_string_literals.h"
+ #include "gnss_sdr_valve.h"
++#include "jamming_detection.h"
+ #include "sgd.h"
+ #include <glog/logging.h>
+ #include <uhd/exception.hpp>
+@@ -63,7 +64,8 @@ UhdSignalSource::UhdSignalSource(const ConfigurationInterface* configuration,
+     otw_format_ = configuration->property(role + ".otw_format", std::string("sc16"));
+     RF_channels_ = configuration->property(role + ".RF_channels", 1);
+     sgd_  = configuration->property(role + ".sgd", 0);
+-    if (sgd_ !=0)
++    jamming_  = configuration->property(role + ".jamming_protection", 0);
++    if (sgd_ != 0)
+         {
+             printf("SGD jamming protection %d\n",sgd_); fflush(stdout);
+             RF_channels_=sgd_; // SGD jamming protection: override RF_channels in this block only => N inputs and RF_chan=1 output
+@@ -74,7 +76,16 @@ UhdSignalSource::UhdSignalSource(const ConfigurationInterface* configuration,
+             int sgd_iter_count = configuration->property(role + ".sgd_iter_count", 10000);
+             jamming_sgd_=gnss_sdr_make_sgd(0, 5e-3, sgd_alpha, sgd_mean, sgd_mean_length, sgd_iter_count);
+         }
+-    if ((sgd_ == 0))
++    if (jamming_ !=0)
++        {
++            printf("Inverse filter jamming protection %d\n",jamming_);
++            RF_channels_=jamming_; // jamming protection: override RF_channels in this block only => N inputs and RF_chan=1 output
++            subdevice_ = configuration->property(role + ".subdevice", std::string("A:A A:B"));
++            jamming_averages=configuration->property(role + ".jamming_averages", Navg);
++            jamming_threshold=configuration->property(role + ".jamming_threshold", NORM_THRESHOLD);
++            jamming_xcorr_=gnss_sdr_make_jamm(jamming_threshold, jamming_averages);
++        }
++    if ((sgd_ == 0) && (jamming_==0))
+         {
+             subdevice_ = configuration->property(role + ".subdevice", empty);
+         }
+@@ -336,6 +347,10 @@ void UhdSignalSource::connect(gr::top_block_sptr top_block)
+                     top_block->connect(uhd_source_, i, jamming_sgd_, i);
+                     printf("UHD -> SGD connect: %d\n",i);fflush(stdout);
+                 }
++            if (jamming_ != 0)
++                {   top_block->connect(uhd_source_, i, jamming_xcorr_, i);
++                    printf("UHD -> Jamming connect: %d\n",i);fflush(stdout);
++                }
+         }
+ }
+ 
+@@ -390,5 +405,9 @@ gr::basic_block_sptr UhdSignalSource::get_right_block(int RF_channel)
+         {
+             return jamming_sgd_;
+         }
++    if ( jamming_xcorr_ != 0ULL)
++        {
++            return jamming_xcorr_;
++        }
+     return uhd_source_;
+ }
+diff --git a/src/algorithms/signal_source/adapters/uhd_signal_source.h b/src/algorithms/signal_source/adapters/uhd_signal_source.h
+index d3f1e3a8a..eb1d685c7 100644
+--- a/src/algorithms/signal_source/adapters/uhd_signal_source.h
++++ b/src/algorithms/signal_source/adapters/uhd_signal_source.h
+@@ -61,6 +61,7 @@ public:
+ private:
+     gr::uhd::usrp_source::sptr uhd_source_;
+     gnss_shared_ptr<gr::block> jamming_sgd_;
++    gnss_shared_ptr<gr::block> jamming_xcorr_;
+ 
+     std::vector<gnss_shared_ptr<gr::block>> valve_;
+     std::vector<gr::blocks::file_sink::sptr> file_sink_;
+@@ -89,6 +90,9 @@ private:
+     size_t item_size_;
+     int RF_channels_;
+     int sgd_;
++    int jamming_;
++    int jamming_averages;
++    double jamming_threshold;
+     unsigned int in_stream_;
+     unsigned int out_stream_;
+ };
+diff --git a/src/algorithms/signal_source/libs/CMakeLists.txt b/src/algorithms/signal_source/libs/CMakeLists.txt
+index 57b094456..b19c63ba8 100644
+--- a/src/algorithms/signal_source/libs/CMakeLists.txt
++++ b/src/algorithms/signal_source/libs/CMakeLists.txt
+@@ -33,6 +33,7 @@ set(SIGNAL_SOURCE_LIB_SOURCES
+     rtl_tcp_dongle_info.cc
+     gnss_sdr_valve.cc
+     sgd_impl.cc
++    jamming_detection.cc
+     gnss_sdr_timestamp.cc
+     ${OPT_SIGNAL_SOURCE_LIB_SOURCES}
+ )
+@@ -41,6 +42,7 @@ set(SIGNAL_SOURCE_LIB_HEADERS
+     rtl_tcp_commands.h
+     rtl_tcp_dongle_info.h
+     gnss_sdr_valve.h
++    jamming_detection.h
+     sgd.h
+     ${OPT_SIGNAL_SOURCE_LIB_HEADERS}
+ )
+diff --git a/src/algorithms/signal_source/libs/jamming_detection.cc b/src/algorithms/signal_source/libs/jamming_detection.cc
+new file mode 100644
+index 000000000..aad88ee7c
+--- /dev/null
++++ b/src/algorithms/signal_source/libs/jamming_detection.cc
+@@ -0,0 +1,125 @@
++/*!
++ *
++ * -------------------------------------------------------------------------
++ *
++ * Copyright (C) 2010-2019  (see AUTHORS file for a list of contributors)
++ *
++ * GNSS-SDR is a software defined Global Navigation
++ *          Satellite Systems receiver
++ *
++ * This file is part of GNSS-SDR.
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ *
++ * -------------------------------------------------------------------------
++ */
++
++#include "jamming_detection.h"
++#include <glog/logging.h>           // for LOG
++#include <gnuradio/io_signature.h>  // for io_signature
++#include <algorithm>                // for min
++#include <cstring>                  // for memcpy
++#include <unistd.h>                 // for usleep
++#include <utility>
++#include <volk/volk.h>
++
++#pragma message("Jamming detection compile")
++
++#define MEMORY_LEN 5 // remember jamming even std rises suddendly
++
++Gnss_Jamming_Protect::Gnss_Jamming_Protect(float threshold, int averages) : gr::sync_block("jamming_detection",
++                               gr::io_signature::make(1, 20, sizeof(gr_complex)),
++                               gr::io_signature::make(1, 1, sizeof(gr_complex))),
++                           d_threshold(threshold),
++                           d_averages(averages)
++{
++    printf("Gnss_Jamming_Protect\n");
++/*
++Ron Economos (April 5, 2020 10:58 AM)
++To: discuss-gnuradio@gnu.org
++I would use set_output_multiple() instead. See my previous e-mail for an
++example.
++https://lists.gnu.org/archive/html/discuss-gnuradio/2019-08/msg00188.html
++*/
++    set_output_multiple(CHUNK_SIZE); // only trigger processing if that amount of samples was accumulated
++    avg_index_=0;
++    weight_={0.,0.};
++    jamming_memory_=0;
++}
++
++#if GNURADIO_USES_STD_POINTERS
++std::shared_ptr<Gnss_Jamming_Protect> gnss_sdr_make_jamm(float threshold, int averages)
++{
++    std::shared_ptr<Gnss_Jamming_Protect> jamming_detect_(new Gnss_Jamming_Protect(threshold, averages));
++    return jamming_detect_;
++}
++#else
++boost::shared_ptr<Gnss_Jamming_Protect> gnss_sdr_make_jamm(float threshold, int averages)
++{
++    boost::shared_ptr<Gnss_Jamming_Protect> jamming_detection(new Gnss_Jamming_Protect(threshold, averages));
++    printf("Jamming detection: variable created\n");
++    return jamming_detection;
++}
++#endif
++
++int Gnss_Jamming_Protect::work(int noutput_items,
++    gr_vector_const_void_star &input_items,
++    gr_vector_void_star &output_items)
++{   long unsigned int ch = 0;
++    unsigned int alignment = volk_get_alignment();
++    gr_complex *bufin; // ,*bufin;
++    gr_complex integral;
++    const gr_complex* in;
++    gr_complex* carre=(gr_complex*)volk_malloc(sizeof(gr_complex)*CHUNK_SIZE, alignment);
++// see https://github.com/gnss-sdr/gnss-sdr/blob/master/src/algorithms/acquisition/gnuradio_blocks/pcps_acquisition_fine_doppler_cc.h for declaration of gr::fft
++    bufin=plan->get_inbuf();
++    // ibufin=iplan->get_inbuf();
++    for (ch = 0; ch < input_items.size(); ch++)
++        { // identity: output the same as 1st channel input
++          in= (const gr_complex*)input_items[ch]; // all channels
++          memcpy(bufin, in, CHUNK_SIZE * sizeof(gr_complex));
++          plan->execute();
++          if (ch==0)
++             {memcpy(bufout0,plan->get_outbuf(),CHUNK_SIZE * sizeof(gr_complex)); // save FFT(CH0)
++             }
++          if (ch==1)
++             {
++              // volk_32fc_x2_multiply_conjugate_32fc(bufout,plan->get_outbuf(),bufout0,CHUNK_SIZE);
++              volk_32fc_x2_divide_32fc(bufout,plan->get_outbuf(),bufout0,CHUNK_SIZE); // CH1/CH0
++              //memcpy(ibufin, bufout, CHUNK_SIZE * sizeof(gr_complex));
++              //iplan->execute(); // result in iplan->get_outbuf()
++              //weight_+=iplan->get_outbuf()[0]; 
++              integral={0.,0.};
++              for (int i=0;i<CHUNK_SIZE;i++) integral+=bufout[i];
++              integral/=CHUNK_SIZE;
++              weight_avg_+=integral;
++              avg_index_++;
++             }
++        }
++    if (avg_index_==d_averages)    // restart averaging
++      {weight_=weight_avg_/(float)avg_index_;
++       weight_avg_={0.,0.};
++       avg_index_=0;
++       printf("xcorr: %f+i*%f -> %f ",weight_.real(),weight_.imag(),norm(weight_));
++      }
++      if ((norm(weight_)<d_threshold)&&(jamming_memory_==0)) // no jamming
++       {
++        memcpy(output_items[0], input_items[0], noutput_items * input_signature()->sizeof_stream_item(ch));
++        printf("\n");
++       }
++    else
++      {if (norm(weight_)>=d_threshold)
++          {printf(" /!\\\n");
++           jamming_memory_=MEMORY_LEN; // reinit memory
++          }
++       else
++          {printf(" \\!/\n");
++           jamming_memory_--;  // |weight_| < NORM_THRESHOLD so jamming_memory_>0 and --
++          }
++       volk_32fc_s32fc_multiply_32fc(carre,(const gr_complex*)input_items[0],-weight_,CHUNK_SIZE); 
++       volk_32fc_x2_add_32fc((gr_complex*)output_items[0], (const gr_complex*)input_items[1], carre, CHUNK_SIZE);
++      }
++//    delete plan;
++    volk_free(carre);
++    return noutput_items;
++}
+diff --git a/src/algorithms/signal_source/libs/jamming_detection.h b/src/algorithms/signal_source/libs/jamming_detection.h
+new file mode 100644
+index 000000000..28d488a77
+--- /dev/null
++++ b/src/algorithms/signal_source/libs/jamming_detection.h
+@@ -0,0 +1,91 @@
++/*!
++ * \file 
++ * \brief  Interface of a GNU Radio block that sends a STOP message to the
++ * control queue right after a specific number of samples have passed through it.
++ * \author Javier Arribas, 2018. jarribas(at)cttc.es
++ * \author Carlos Aviles, 2010. carlos.avilesr(at)googlemail.com
++ *
++ * -------------------------------------------------------------------------
++ *
++ * Copyright (C) 2010-2019  (see AUTHORS file for a list of contributors)
++ *
++ * GNSS-SDR is a software defined Global Navigation
++ *          Satellite Systems receiver
++ *
++ * This file is part of GNSS-SDR.
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ *
++ * -------------------------------------------------------------------------
++ */
++
++
++#ifndef GNSS_SDR_GNSS_SDR_JAM_H
++#define GNSS_SDR_GNSS_SDR_JAM_H
++
++#include "concurrent_queue.h"
++#if GNURADIO_USES_STD_POINTERS
++#include <memory>
++#else
++#include <boost/shared_ptr.hpp>
++#endif
++#include <gnuradio/sync_block.h>  // for sync_block
++#include <gnuradio/types.h>       // for gr_vector_const_void_star
++#include <pmt/pmt.h>
++#include <cstddef>  // for size_t
++#include <cstdint>
++#include <memory>
++
++#include <gnuradio/fft/fft.h>
++#include <gnuradio/fft/fft_shift.h>
++
++// #define CHUNK_SIZE (2048*8*2) // ~1023 MS/s/32768=30~Hz/bin
++#define CHUNK_SIZE (8192*64) // cf Matlab
++#define NORM_THRESHOLD (0.08)
++
++class Gnss_Jamming_Protect;
++#if GNURADIO_USES_STD_POINTERS
++std::shared_ptr<Gnss_Jamming_Protect> gnss_sdr_make_jamm(
++    float threshold, int averages);
++#else
++boost::shared_ptr<Gnss_Jamming_Protect> gnss_sdr_make_jamm(
++    float threshold, int averages);
++#endif
++
++/*!
++ * \brief Implementation of a GNU Radio block that sends a STOP message to the
++ * control queue right after a specific number of samples have passed through it.
++ */
++class Gnss_Jamming_Protect : public gr::sync_block
++{
++public:
++    int work(int noutput_items,
++        gr_vector_const_void_star &input_items,
++        gr_vector_void_star &output_items);
++
++private:
++#if GNURADIO_USES_STD_POINTERS
++    friend std::shared_ptr<Gnss_Jamming_Protect> gnss_sdr_make_jamm(
++           float threshold, int averages);
++#else
++    friend boost::shared_ptr<Gnss_Jamming_Protect> gnss_sdr_make_jamm(
++           float threshold, int averages);
++#endif
++
++    Gnss_Jamming_Protect(float threshold, int averages);
++    gr::fft::fft_complex_fwd* plan = new gr::fft::fft_complex_fwd(CHUNK_SIZE); //, true);
++    gr::fft::fft_complex_rev* iplan= new gr::fft::fft_complex_rev(CHUNK_SIZE); //, false); // forward = false
++    gr_complex bufout0[CHUNK_SIZE];
++    gr_complex bufout[CHUNK_SIZE];
++    gr_complex processed_output[CHUNK_SIZE];
++    gr_complex weight_;
++    gr_complex weight_avg_;
++    float d_threshold;
++    int d_averages;
++    int jamming_memory_;
++    int avg_index_;
++    uint64_t d_ncopied_items;
++    Concurrent_Queue<pmt::pmt_t>* d_queue;
++};
++
++#endif  // GNSS_SDR_GNSS_SDR_JAM_H
+-- 
+2.41.0
+
