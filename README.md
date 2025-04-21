@@ -19,15 +19,15 @@ This solves the issue of multiple antenna-inputs and single output.
 ## Compiling
 
 Rather than copying the whole gnss-sdr source tree and updating a few files, we have created
-patches (May 2022) and clone a given hash of the gnss-sdr source code to which patches are
-to be applied. After 
+patches (April 2025) and clone a given hash of the gnss-sdr source code (set to version 0.0.20
+as of April 2025) to which patches are to be applied. After 
 ```shell
 git clone --recursive https://github.com/oscimp/gnss-sdr-1pps
 ```
 we apply the patches with
 ```shell
 cd gnss-sdr
-for i in ../0*v0.0.18*patch; do patch -p1 < $i;done
+for i in ../0*v0.0.20*patch; do patch -p1 < $i;done
 ```
 The authors of gnss-sdr have de-activated again logging in 0.13 (see https://gnss-sdr.org/gnss-sdr-v0013-released/) so
 compiling gnss-sdr with logging requires enabling the cmake flag ``-DENABLE_LOG=ON``. This command is applicable to
