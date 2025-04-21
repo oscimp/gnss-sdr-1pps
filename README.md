@@ -118,7 +118,7 @@ the top value of the counter and hence shift the 1-PPS position. The top value i
 
 ## Spoofing detection and cancellation
 
-The two sources for which configuration options have been added are File Source and UHD Source
+The two sources for which configuration options have been added are ``File Source`` and ``UHD Source``
 aimed at the B210 (two coherent input channels).
 
 For the file source: the base filename is provided and we assume that two files exist, ``base_1.bin``
@@ -136,7 +136,7 @@ the channels are A:A and A:B meaning the two RX2 inputs. Spoofing protection exp
 signal with a BPSK structure. Alternatively, for noise detection and cancellation (no
 assumption on the disturbing signal structure), a Stochastic Descent Gradient Approach (SGD) has
 been implemented. This is activated with ``SignalSource.sgd=N``, with only ``N=2`` supported
-as well, and is exclusive to ``spoofing_protection`` (either spoofing_protection or sgd,
+as well, and is exclusive to ``spoofing_protection`` (either ``spoofing_protection`` **or** ``sgd``,
 but not both).
 
 Optional arguments to the Spoofing cancellation block are the phase standard deviation threshold to identify whether
@@ -161,7 +161,7 @@ $ ls -l /t/7_m35dBm/
 -rw-r--r-- 1 xxx xxx 1964160000 Jun  5 17:24 7_m35dBm_2.bin
 ```
 
-Running the spoofing detection mechanism from gnss-sdr on these files will display
+Running the spoofing detection mechanism from ``gnss-sdr`` on these files will display
 ```shell
 10:     meanarg=0.6722  meanabs=8.122   stdargres_=0.00061      weightabs=8.09,weightarg=0.68 /!\
 ```
