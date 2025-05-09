@@ -1,0 +1,219 @@
+From 2b3bc4610577ea4d7970f1b8d2803388a1a513c6 Mon Sep 17 00:00:00 2001
+From: Jean-Michel Friedt <friedtj@free.fr>
+Date: Fri, 9 May 2025 16:31:49 +0200
+Subject: [PATCH] add file source management for spoofing detection
+
+---
+ .../adapters/file_source_base.cc              | 57 +++++++++++++++++--
+ .../signal_source/adapters/file_source_base.h | 16 +++++-
+ 2 files changed, 65 insertions(+), 8 deletions(-)
+
+diff --git a/src/algorithms/signal_source/adapters/file_source_base.cc b/src/algorithms/signal_source/adapters/file_source_base.cc
+index aabef306b..047bd8093 100644
+--- a/src/algorithms/signal_source/adapters/file_source_base.cc
++++ b/src/algorithms/signal_source/adapters/file_source_base.cc
+@@ -25,6 +25,7 @@
+ #include "Galileo_E5b.h"
+ #include "Galileo_E6.h"
+ #include "configuration_interface.h"
++#include "spoofing_detection.h"
+ #include "gnss_sdr_filesystem.h"
+ #include "gnss_sdr_flags.h"
+ #include "gnss_sdr_string_literals.h"
+@@ -48,7 +49,6 @@ FileSourceBase::FileSourceBase(ConfigurationInterface const* configuration, std:
+     : SignalSourceBase(configuration, role, std::move(impl)),
+       queue_(queue),
+       role_(role),
+-      filename_(configuration->property(role_ + ".filename"s, "./example_capture.dat"s)),
+       dump_filename_(configuration->property(role_ + ".dump_filename"s, "./my_capture.dat"s)),
+       item_type_(configuration->property(role_ + ".item_type"s, std::move(default_item_type))),
+       item_size_(0),
+@@ -62,6 +62,21 @@ FileSourceBase::FileSourceBase(ConfigurationInterface const* configuration, std:
+       enable_throttle_control_(configuration->property(role_ + ".enable_throttle_control"s, false)),
+       dump_(configuration->property(role_ + ".dump"s, false))
+ {
++    spoofing_protection_  = configuration->property(role_ + ".spoofing_protection", 0);
++    if (spoofing_protection_ !=0) 
++         {std::cout
++		<< "spoofing protection: "
++		<< spoofing_protection_ << '\n';
++          filename_ = configuration->property(role_ + ".filename"s, "./example_capture"s);
++          filename2_ = configuration->property(role_ + ".filename"s, "./example_capture"s);
++          filename_=filename_+"_1.bin";
++          filename2_=filename2_+"_2.bin";
++          spoofing_averages=configuration->property(role_ + ".spoofing_averages", Navg);
++          spoofing_threshold=configuration->property(role_ + ".spoofing_threshold", STD_THRESHOLD);
++          printf("%s %s  -- threshold = %f\n",filename_.c_str(),filename2_.c_str(), spoofing_threshold);
++         }
++    else
++         filename_=configuration->property(role_ + ".filename"s, "./example_capture.dat"s);
+     minimum_tail_s_ = std::max(configuration->property("Acquisition_1C.coherent_integration_time_ms", 0.0) * 0.001 * 2.0, minimum_tail_s_);
+     minimum_tail_s_ = std::max(configuration->property("Acquisition_2S.coherent_integration_time_ms", 0.0) * 0.001 * 2.0, minimum_tail_s_);
+     minimum_tail_s_ = std::max(configuration->property("Acquisition_L5.coherent_integration_time_ms", 0.0) * 0.001 * 2.0, minimum_tail_s_);
+@@ -156,6 +171,7 @@ void FileSourceBase::init()
+ 
+     create_throttle();
+     create_valve();
++    create_spoof();
+     create_sink();
+ }
+ 
+@@ -186,10 +202,15 @@ void FileSourceBase::connect(gr::top_block_sptr top_block)
+     // VALVE
+     if (valve())
+         {
+-            top_block->connect(std::move(input), 0, valve(), 0);
+-            DLOG(INFO) << "connected source to valve";
+-
+-            output = valve();
++         top_block->connect(std::move(input), 0, valve(), 0);
++         if (spoofing_protection_ !=0)   
++            {
++             top_block->connect(file_source2(), 0, valve2(), 0);
++             top_block->connect(valve2(), 0, spoofing_detect(), 1);
++             top_block->connect(valve(),  0, spoofing_detect(), 0);
++            }
++         DLOG(INFO) << "connected source to valve";
++         output = valve();
+         }
+     else
+         {
+@@ -270,6 +291,7 @@ gr::basic_block_sptr FileSourceBase::get_right_block()
+     // clang-tidy wants braces around the if-conditions. clang-format wants to break the braces into
+     // multiple line blocks. It's much more readable this way
+     // clang-format off
++    if (spoofing_protection_ !=0) { return spoofing_detect_; }
+     if (valve_) { return valve_; }
+     if (throttle_) { return throttle_; }
+     return source();
+@@ -282,6 +304,10 @@ std::string FileSourceBase::filename() const
+     return filename_;
+ }
+ 
++std::string FileSourceBase::filename2() const
++{
++    return filename2_;
++}
+ 
+ std::string FileSourceBase::item_type() const
+ {
+@@ -475,7 +501,10 @@ bool FileSourceBase::is_complex() const { return is_complex_; }
+ // Simple accessors
+ gnss_shared_ptr<gr::block> FileSourceBase::source() const { return file_source(); }
+ gnss_shared_ptr<gr::block> FileSourceBase::file_source() const { return file_source_; }
++gnss_shared_ptr<gr::block> FileSourceBase::file_source2() const { return file_source2_; }
+ gnss_shared_ptr<gr::block> FileSourceBase::valve() const { return valve_; }
++gnss_shared_ptr<gr::block> FileSourceBase::valve2() const { return valve2_; }
++gnss_shared_ptr<gr::block> FileSourceBase::spoofing_detect() const { return spoofing_detect_; }
+ gnss_shared_ptr<gr::block> FileSourceBase::throttle() const { return throttle_; }
+ gnss_shared_ptr<gr::block> FileSourceBase::sink() const { return sink_; }
+ 
+@@ -491,7 +520,12 @@ gr::blocks::file_source::sptr FileSourceBase::create_file_source()
+             // TODO: why are we manually seeking, instead of passing the samples_to_skip to the file_source factory?
+             auto samples_to_skip = samplesToSkip();
+ 
+-            file_source_ = gr::blocks::file_source::make(item_size(), filename().data(), repeat());
++            if (spoofing_protection_ !=0) 
++               {file_source_ = gr::blocks::file_source::make(item_size(), filename().data(), repeat());
++                file_source2_= gr::blocks::file_source::make(item_size(), filename2().data(), repeat());
++               }
++            else
++               file_source_ = gr::blocks::file_source::make(item_size(), filename().data(), repeat());
+ 
+             if (samples_to_skip > 0)
+                 {
+@@ -544,6 +578,14 @@ gr::blocks::throttle::sptr FileSourceBase::create_throttle()
+     return throttle_;
+ }
+ 
++gnss_shared_ptr<gr::block> FileSourceBase::create_spoof()
++{
++    if (spoofing_protection_ !=0) 
++       {spoofing_detect_=gnss_sdr_make_spoof(spoofing_threshold , spoofing_averages);
++       }
++
++    return spoofing_detect_;
++}
+ 
+ gnss_shared_ptr<gr::block> FileSourceBase::create_valve()
+ {
+@@ -552,6 +594,9 @@ gnss_shared_ptr<gr::block> FileSourceBase::create_valve()
+             // if a number of samples is specified, honor it by creating a valve
+             // in practice, this is always true
+             valve_ = gnss_sdr_make_valve(source_item_size(), samples(), queue_);
++            if (spoofing_protection_ !=0) 
++               {valve2_ = gnss_sdr_make_valve(source_item_size(), samples(), queue_);
++               }
+             DLOG(INFO) << "valve(" << valve_->unique_id() << ")";
+ 
+             // enable subclass hooks
+diff --git a/src/algorithms/signal_source/adapters/file_source_base.h b/src/algorithms/signal_source/adapters/file_source_base.h
+index 5933d3520..16fb3adda 100644
+--- a/src/algorithms/signal_source/adapters/file_source_base.h
++++ b/src/algorithms/signal_source/adapters/file_source_base.h
+@@ -74,6 +74,7 @@ public:
+ 
+     //! The file to read
+     std::string filename() const;
++    std::string filename2() const;
+ 
+     //! The item type
+     std::string item_type() const;
+@@ -128,8 +129,11 @@ protected:
+ 
+     // Generic access to created objects
+     gnss_shared_ptr<gr::block> file_source() const;
++    gnss_shared_ptr<gr::block> file_source2() const;
+     gnss_shared_ptr<gr::block> valve() const;
++    gnss_shared_ptr<gr::block> valve2() const;
+     gnss_shared_ptr<gr::block> throttle() const;
++    gnss_shared_ptr<gr::block> spoofing_detect() const;
+     gnss_shared_ptr<gr::block> sink() const;
+ 
+     // The methods create the various blocks, if enabled, and return access to them. The created
+@@ -138,6 +142,7 @@ protected:
+     gr::blocks::throttle::sptr create_throttle();
+     gnss_shared_ptr<gr::block> create_valve();
+     gr::blocks::file_sink::sptr create_sink();
++    gnss_shared_ptr<gr::block> create_spoof();
+ 
+     // Subclass hooks to augment created objects, as required
+     virtual void create_file_source_hook();
+@@ -152,7 +157,7 @@ protected:
+     virtual void post_disconnect_hook(gr::top_block_sptr top_block);
+ 
+ private:
+-    gr::blocks::file_source::sptr file_source_;
++    gr::blocks::file_source::sptr file_source_,file_source2_;
+     gr::blocks::throttle::sptr throttle_;
+     gr::blocks::file_sink::sptr sink_;
+ 
+@@ -163,10 +168,13 @@ private:
+     // beyond its lifetime. Fortunately, the queue is only used to create the valve, so the
+     // likelihood of holding a stale pointer is mitigated
+     gnss_shared_ptr<gr::block> valve_;
++    gnss_shared_ptr<gr::block> valve2_;
++    gnss_shared_ptr<gr::block> spoofing_detect_;
++
+     Concurrent_Queue<pmt::pmt_t>* queue_;
+ 
+     std::string role_;
+-    std::string filename_;
++    std::string filename_, filename2_;
+     std::string dump_filename_;
+     std::string item_type_;
+     size_t item_size_;
+@@ -179,6 +187,10 @@ private:
+     bool repeat_;
+     bool enable_throttle_control_;
+     bool dump_;
++
++    int spoofing_protection_;
++    int spoofing_averages;
++    double spoofing_threshold;
+ };
+ 
+ /** \} */
+-- 
+2.49.0
+

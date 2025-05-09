@@ -128,7 +128,7 @@ new file mode 100644
 index 000000000..d3bc50e2d
 --- /dev/null
 +++ b/src/algorithms/signal_source/libs/spoofing_detection.cc
-@@ -0,0 +1,317 @@
+@@ -0,0 +1,322 @@
 +/*!
 + *
 + * -------------------------------------------------------------------------
@@ -145,6 +145,8 @@ index 000000000..d3bc50e2d
 + * -------------------------------------------------------------------------
 + */
 +
++#define save_data // save data in txt file for debug
++
 +#include "spoofing_detection.h"
 +#include <glog/logging.h>           // for LOG
 +#include <gnuradio/io_signature.h>  // for io_signature
@@ -153,12 +155,12 @@ index 000000000..d3bc50e2d
 +#include <unistd.h>                 // for usleep
 +#include <utility>
 +#include <volk/volk.h>
-+//#define CHUNK_SIZE (2048*8*2) // ~1023 MS/s/16384=30~Hz/bin moved to .h
 +#define KEEPSIZE 600 // 30 Hz/bin * 600 = ~+/-20 kHz
-+#define MAXSAT  20   // too many satellites will start detecting genuine constellation ?
 +#define MAXKEEP 7    // too many satellites will start detecting genuine constellation ?
++#define MAXSAT  MAXKEEP   // too many satellites will start detecting genuine constellation ?
 +#define MEMORY_LEN 5 // remember spoofing even std rises suddendly
-+#define moycpl       // average complex (if active) or average mag/phase (if inactive)
++#define THRES 1000.
++//#define moycpl       // average complex (if active) or average mag/phase (if inactive)
 +
 +#pragma message("Spoofing detection compile")
 +
@@ -223,17 +225,17 @@ index 000000000..d3bc50e2d
 +    gr_complex weightcpl={0.,0.};
 +    gr_complex* bufin;
 +    int opposite=0;
++    gr_complex integral;
 +#ifdef moycpl
 +    gr_complex stddiv[MAXSAT];
-+    gr_complex integral;
 +#else
 +     float meanarg,meanabs,stdarg[MAXSAT],stdabs[MAXSAT],weightabs=0.,weightarg=0.;
 +#endif
 +    gr_complex meandiv;
-+/*
++#ifdef save_data
 +    FILE *fo;
 +    char filenam[256];
-+*/
++#endif
 +    int count;
 +    const gr_complex* in;
 +    gr_complex* carre=(gr_complex*)volk_malloc(sizeof(gr_complex)*CHUNK_SIZE, alignment);
@@ -263,6 +265,8 @@ index 000000000..d3bc50e2d
 +          volk_32fc_x2_multiply_32fc(carre, in, in, CHUNK_SIZE);
 +          memcpy(bufin, carre, CHUNK_SIZE * sizeof(gr_complex));
 +          plan->execute();
++//printf("ch: %d",ch);for (int m=0;m<5;m++) printf(" %f+j%f",real(in[m]),imag(in[m]));
++//printf("\n");
 +          if (ch==0)
 +             {memcpy(bufout0_sta,plan->get_outbuf(),KEEP_SIZE * sizeof(gr_complex)); // save FFT(CH0)
 +     //         volk_32fc_s32fc_multiply_32fc(bufout0_sta,bufout0_sta,{1000.0,0.0},KEEP_SIZE);
@@ -284,38 +288,39 @@ index 000000000..d3bc50e2d
 +              volk_32fc_x2_add_32fc(&spoofing_average_div[KEEP_SIZE],&spoofing_average_div[KEEP_SIZE],bufout_sto,KEEP_SIZE);
 +              avg_index_++;
 +             }
-+/*
++#ifdef save_data
 +	  if ((first_time_==0)&&(avg_index_==Navg))
-+	     {//if (ch==input_items.size()-1) first_time_=1;                   // save both channels in file
++	     {if (ch==input_items.size()-1) first_time_=1;                   // save both channels in file
 +              sprintf(filenam,"/tmp/output_f0_%d.txt",num_file_);
 +	      fo=fopen(filenam,"w");
 +	      for (count=0;count<KEEP_SIZE;count++)
-+                  fprintf(fo,"%ld %f %f\n",ch,bufout0_sta[count].real(),bufout0_sta[count].imag());
-+	      for (count=0;count<KEEP_SIZE;count++)
 +                  fprintf(fo,"%ld %f %f\n",ch,bufout0_sto[count].real(),bufout0_sto[count].imag());
++	      for (count=0;count<KEEP_SIZE;count++)
++                  fprintf(fo,"%ld %f %f\n",ch,bufout0_sta[count].real(),bufout0_sta[count].imag());
 +	      fclose(fo);
 +              sprintf(filenam,"/tmp/output_favg%ld_%d.txt",ch,num_file_);
 +	      fo=fopen(filenam,"w");
 +	      for (count=0;count<KEEP_SIZE*2;count++)
-+                  fprintf(fo,"%ld %f %f\n",ch,spoofing_average[count].real(),spoofing_average[count].imag());
++                  fprintf(fo,"%ld %f %f %f %f\n",ch,spoofing_average_div[count].real(),spoofing_average_div[count].imag(),spoofing_average_mul[count].real(),spoofing_average_mul[count].imag()); // div cancels amplitude but mul helps detect max
 +	      fclose(fo);
 +              num_file_++;
 +              printf("\n***********\n");
-+	      fo=fopen("/tmp/output_t1.txt","a");
++	      fo=fopen("/tmp/output_t1.txt","a"); // time domain data
 +	      for (count=0;count<CHUNK_SIZE;count++) fprintf(fo,"%ld %f %f\n",ch,in[count].real(),in[count].imag());
 +	      fclose(fo);
-+	      fo=fopen("/tmp/output_t2.txt","a");
++	      fo=fopen("/tmp/output_t2.txt","a"); // time domain squared data
 +	      for (count=0;count<CHUNK_SIZE;count++) fprintf(fo,"%ld %f %f\n",ch,carre[count].real(),carre[count].imag());
 +	      fclose(fo);
 +	     }
-+*/
++#endif
 +        }
 +    if (avg_index_==d_averages)    // restart averaging
 +      {//volk_32fc_magnitude_squared_32f(spoofing_mag,spoofing_average,KEEP_SIZE*2);
 +// https://www.libvolk.org/doxygen/volk_32fc_index_max_16u.html
 +// Finds and returns the index which contains the maximum magnitude for complex points in the given vector
 +       volk_32fc_index_max_16u(&maxpos, &spoofing_average_mul[KEEP_SIZE-10],20);  // max value where there should be no satellite
-+       maxvallim=10.*norm(spoofing_average_mul[KEEP_SIZE-10+maxpos]);   // abs(max)^2  TODO adjust x10 ?
++       maxvallim=THRES*norm(spoofing_average_mul[KEEP_SIZE-10+maxpos]);   // abs(max)^2  TODO adjust x10 ?
++//printf("maxvallim=%f\n",maxvallim);
 +       count=0;
 +#ifdef moycpl
 +       meandiv={0.,0.};
@@ -342,12 +347,13 @@ index 000000000..d3bc50e2d
 +          meandiv+=sqrt(spoofing_average_div[maxpos]); // racine des coefficient mis au carr'e
 +          stddiv[count]=sqrt(spoofing_average_div[maxpos]);
 +#else
-+          meanarg+=(arg(spoofing_average_div[maxpos])/2);
++          meanarg+=abs(arg(spoofing_average_div[maxpos])/2);
 +          meanabs+=sqrt(abs(spoofing_average_div[maxpos]));
-+          stdarg[count]=(arg(spoofing_average_div[maxpos])/2);
++          stdarg[count]=abs(arg(spoofing_average_div[maxpos])/2);
 +          stdabs[count]=sqrt(abs(spoofing_average_div[maxpos]));
 +#endif
 +          count++;
++//  printf("%d maxval=%f %f\n",maxpos,maxval,arg(spoofing_average_div[maxpos])/2);
 +         }
 +       while ((maxval>maxvallim)&&(count<MAXSAT));
 +       if (count>0)
@@ -451,7 +457,7 @@ new file mode 100644
 index 000000000..6232fbf5d
 --- /dev/null
 +++ b/src/algorithms/signal_source/libs/spoofing_detection.h
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,102 @@
 +/*!
 + * \file 
 + * \brief  Interface of a GNU Radio block that sends a STOP message to the
