@@ -9,7 +9,7 @@ Signed-off-by: Gwenhael Goavec-Merou <gwenhael.goavec-merou@trabucayre.com>
  .../adapters/uhd_signal_source.h              |   4 +
  .../signal_source/libs/CMakeLists.txt         |   2 +
  .../signal_source/libs/spoofing_detection.cc  | 322 ++++++++++++++++++
- .../signal_source/libs/spoofing_detection.h   | 102 ++++++
+ .../signal_source/libs/spoofing_detection.h   | 104 ++++++
  5 files changed, 447 insertions(+), 1 deletion(-)
  create mode 100644 src/algorithms/signal_source/libs/spoofing_detection.cc
  create mode 100644 src/algorithms/signal_source/libs/spoofing_detection.h
@@ -457,7 +457,7 @@ new file mode 100644
 index 000000000..6232fbf5d
 --- /dev/null
 +++ b/src/algorithms/signal_source/libs/spoofing_detection.h
-@@ -0,0 +1,102 @@
+@@ -0,0 +1,104 @@
 +/*!
 + * \file 
 + * \brief  Interface of a GNU Radio block that sends a STOP message to the
